@@ -12,15 +12,15 @@ impl WaveGen {
     pub fn new(t0: u64, rate: u64) -> Self { Self { t: 0, t0, rate } }
 
     pub fn calculate(&self) -> f32 {
-        ((self.t - self.t0) as f32 * 2f32 * std::f32::consts::PI / self.rate as f32).sin()
+        ((self.t - self.t0) as f32 * 2. * std::f32::consts::PI / self.rate as f32).sin()
     }
 }
 
 impl Iterator for WaveGen {
-    type Item = i16;
+    type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let ret = (self.calculate() * i16::max_value() as f32) as i16;
+        let ret = self.calculate();
         self.t += 1;
         if self.t > self.rate { self.t -= self.rate; }
         Some(ret)
@@ -63,7 +63,7 @@ fn main() {
 
     let config = supported_config.into();
 
-    let mut wave = WaveGen::new(0, 10);
+    let mut wave = WaveGen::new(0, 100);
 
     // for item in wave {
     //     println!("{}", item)
@@ -73,12 +73,15 @@ fn main() {
         &config,
         move |data: &mut [f32], _| {
             for sample in data.iter_mut() {
-                *sample = wave.next().expect("") as f32;
+                *sample = wave.next().unwrap();
             }
         },
         |err| {
-            eprintln!("an error occurred on the output audio stream: {}", err)
+            eprintln!("an error occurred on the output audio stream: {}", err);
         }).unwrap();
 
     stream.play().unwrap();
+
+    std::thread::sleep(std::time::Duration::from_secs(10));
+
 }
