@@ -1,24 +1,22 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::SampleRate;
 
+
+const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(44100);
+const WAVE_LENGTH: usize = 200;
 
 pub struct WaveGen {
-    t: u64,
-    rate: u64,
-    amp: u64,
+    t: usize,
+    rate: usize,
+    amp: usize,
 }
 
 impl WaveGen {
-    pub fn new(t: u64, rate: u64, amp: u64) -> Self { Self { t, rate, amp } }
+    pub fn new(t: usize, rate: usize, amp: usize) -> Self { Self { t, rate, amp } }
 
     pub fn calculate(&self) -> i16 {
         let value = (self.t as f32 * 2. * std::f32::consts::PI / self.rate as f32).sin();
         (value * self.amp as f32) as i16
     }
-
-    pub fn get_t(&self) -> &u64 { &self.t }
-
-    pub fn get_t_mut(&mut self) -> &mut u64 { &mut self.t }
 }
 
 impl Iterator for WaveGen {
@@ -32,27 +30,42 @@ impl Iterator for WaveGen {
     }
 }
 
-pub struct Encoder<I, T> {
+pub struct Encoder<I> {
     iter: I,
-    carrier: T,
-    tick: u64,
+    carrier: WaveGen,
+    tick: usize,
 }
 
-impl<I, T> Encoder<I, T> {
-    pub fn new(iter: I, carrier: T) -> Self { Self { iter, carrier, tick: 0 } }
+impl<I> Encoder<I> {
+    const SECTION: usize = WAVE_LENGTH * 10;
+
+    pub fn new(iter: I, carrier: WaveGen) -> Self { Self { iter, carrier, tick: Self::SECTION } }
 }
 
-impl<I, T> Iterator for Encoder<I, T>
+impl<I> Iterator for Encoder<I>
     where I: Iterator,
           I::Item: Into<bool>,
-          T: Iterator,
 {
     type Item = i16;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next() {
-            Some(item) => if item.into() { Some(1) } else { Some(0) },
-            None => None,
+        if self.tick < Self::SECTION {
+            let ret = self.carrier.next().unwrap();
+            self.tick += 1;
+            Some(ret)
+        } else {
+            match self.iter.next() {
+                Some(item) => {
+                    let shift = if item.into() { 0 } else { WAVE_LENGTH / 2 };
+
+                    self.carrier = WaveGen::new(shift, WAVE_LENGTH, std::i16::MAX as usize);
+
+                    let ret = self.carrier.next().unwrap();
+                    self.tick = 1;
+                    Some(ret)
+                }
+                None => None,
+            }
         }
     }
 }
@@ -81,8 +94,6 @@ pub fn print_hosts() {
 }
 
 fn main() {
-    print_hosts();
-
     let output_device = cpal::default_host()
         .default_output_device().expect("no output device available");
 
@@ -92,32 +103,35 @@ fn main() {
     let output_config = output_device
         .supported_output_configs().expect("error while querying configs")
         .map(|item| item.with_max_sample_rate())
-        .filter(|item| item.sample_rate() == SampleRate(44100))
-        .next().expect("expected sample format not found")
+        .filter(|item| item.sample_rate() == SAMPLE_RATE)
+        .next().expect("expected configuration not found")
         .into();
 
-    println!("output: {:#?}", &output_config);
+    println!("{:?}: {:#?}", output_device.name(), &output_config);
 
     let input_config = input_device
         .supported_input_configs().expect("error while querying configs")
         .map(|item| item.with_max_sample_rate())
-        .filter(|item| item.sample_rate() == SampleRate(44100))
-        .next().expect("expected sample format not found")
+        .filter(|item| item.sample_rate() == SAMPLE_RATE)
+        .next().expect("expected configuration not found")
         .into();
 
-    println!("input: {:#?}", &input_config);
+    println!("{:?}: {:#?}", input_device.name(), &input_config);
 
-    let mut wave = WaveGen::new(0, 200, (std::i16::MAX / 4) as u64);
+    let mut wave = WaveGen::new(0, WAVE_LENGTH, std::i16::MAX as usize);
 
-    // let msg = vec![true];
+    let msg = vec![true, true, true, true, true, true];
 
-    // let encoder = Encoder::new(msg.iter(), wave);
+    let mut encoder = Encoder::new(msg.into_iter(), wave);
 
     let output_stream = output_device.build_output_stream(
         &output_config,
         move |data: &mut [f32], _| {
             for sample in data.iter_mut() {
-                *sample = wave.next().unwrap() as f32 / std::i16::MAX as f32;
+                *sample = match encoder.next() {
+                    Some(item) => item as f32 / std::i16::MAX as f32,
+                    None => 0.,
+                };
             }
         },
         |err| {
@@ -130,7 +144,7 @@ fn main() {
         &input_config,
         move |data: &[f32], _| {
             for sample in data.iter() {
-                println!("{}", *sample);
+                // println!("{}", *sample);
             }
         },
         |err| {
