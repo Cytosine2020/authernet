@@ -1,9 +1,15 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::borrow::Borrow;
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(44100);
 const WAVE_LENGTH: usize = 200;
+const BARKER: [bool; 13] = [
+    true, true, true, true, true, false, false,
+    true, true, false, true, false, true
+];
 
+#[derive(Copy, Clone)]
 pub struct WaveGen {
     t: usize,
     rate: usize,
@@ -17,6 +23,10 @@ impl WaveGen {
         let value = (self.t as f32 * 2. * std::f32::consts::PI / self.rate as f32).sin();
         (value * self.amp as f32) as i16
     }
+
+    pub fn set_t(&mut self, t: usize) { self.t = t % self.rate; }
+
+    pub fn get_rate(&self) -> usize { self.rate }
 }
 
 impl Iterator for WaveGen {
@@ -30,44 +40,15 @@ impl Iterator for WaveGen {
     }
 }
 
-pub struct Encoder<I> {
-    iter: I,
-    carrier: WaveGen,
-    tick: usize,
-}
-
-impl<I> Encoder<I> {
-    const SECTION: usize = WAVE_LENGTH * 10;
-
-    pub fn new(iter: I, carrier: WaveGen) -> Self { Self { iter, carrier, tick: Self::SECTION } }
-}
-
-impl<I> Iterator for Encoder<I>
+pub fn modulate<I>(iter: I, mut carrier: WaveGen) -> impl Iterator<Item=i16>
     where I: Iterator,
-          I::Item: Into<bool>,
+          I::Item: Borrow<bool>,
 {
-    type Item = i16;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.tick < Self::SECTION {
-            let ret = self.carrier.next().unwrap();
-            self.tick += 1;
-            Some(ret)
-        } else {
-            match self.iter.next() {
-                Some(item) => {
-                    let shift = if item.into() { 0 } else { WAVE_LENGTH / 2 };
-
-                    self.carrier = WaveGen::new(shift, WAVE_LENGTH, std::i16::MAX as usize);
-
-                    let ret = self.carrier.next().unwrap();
-                    self.tick = 1;
-                    Some(ret)
-                }
-                None => None,
-            }
-        }
-    }
+    iter.map(move |bit| {
+        let wave_len = carrier.get_rate();
+        carrier.set_t(if *bit.borrow() { 0 } else { wave_len / 2 });
+        carrier.take(wave_len * 10)
+    }).flatten()
 }
 
 pub fn print_hosts() {
@@ -107,8 +88,6 @@ fn main() {
         .next().expect("expected configuration not found")
         .into();
 
-    println!("{:?}: {:#?}", output_device.name(), &output_config);
-
     let input_config = input_device
         .supported_input_configs().expect("error while querying configs")
         .map(|item| item.with_max_sample_rate())
@@ -116,19 +95,23 @@ fn main() {
         .next().expect("expected configuration not found")
         .into();
 
+    println!("{:?}: {:#?}", output_device.name(), &output_config);
+
     println!("{:?}: {:#?}", input_device.name(), &input_config);
 
-    let mut wave = WaveGen::new(0, WAVE_LENGTH, std::i16::MAX as usize);
+    let wave = WaveGen::new(0, WAVE_LENGTH, std::i16::MAX as usize);
 
-    let msg = vec![true, true, true, true, true, true];
+    let wave_10 = wave.clone().take(WAVE_LENGTH * 10);
 
-    let mut encoder = Encoder::new(msg.into_iter(), wave);
+    let mut msg = wave_10.clone()
+        .chain(modulate(BARKER.iter(), wave.clone()))
+        .chain(wave_10.clone());
 
     let output_stream = output_device.build_output_stream(
         &output_config,
         move |data: &mut [f32], _| {
             for sample in data.iter_mut() {
-                *sample = match encoder.next() {
+                *sample = match msg.next() {
                     Some(item) => item as f32 / std::i16::MAX as f32,
                     None => 0.,
                 };
@@ -138,18 +121,18 @@ fn main() {
             eprintln!("an error occurred on the output audio stream: {}", err);
         }).unwrap();
 
-    output_stream.play().unwrap();
-
     let input_stream = input_device.build_input_stream(
         &input_config,
         move |data: &[f32], _| {
-            for sample in data.iter() {
+            for _sample in data.iter() {
                 // println!("{}", *sample);
             }
         },
         |err| {
             eprintln!("an error occurred on the inout audio stream: {}", err);
         }).unwrap();
+
+    output_stream.play().unwrap();
 
     input_stream.play().unwrap();
 
