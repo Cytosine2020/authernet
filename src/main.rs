@@ -21,6 +21,24 @@ const BARKER: [bool; 11] = [
 // const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 #[derive(Copy, Clone)]
+pub struct BitReceive {
+    inner: [u8; DATA_PACK / 8],
+    count: usize,
+}
+
+impl BitReceive {
+    pub fn new() -> Self { Self { inner: [0; DATA_PACK / 8], count: 0 } }
+
+    pub fn push(&mut self, bit: bool) -> usize {
+        self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
+        self.count += 1;
+        self.count
+    }
+
+    pub fn into_array(self) -> [u8; DATA_PACK / 8] { self.inner }
+}
+
+#[derive(Copy, Clone)]
 pub struct WaveGen {
     t: usize,
     rate: usize,
@@ -98,7 +116,7 @@ pub fn qpsk_modulate<I>(iter: I, mut carrier: WaveGen, len: usize) -> impl Itera
 enum DemodulateState {
     WAITE,
     MATCH(usize, i64),
-    RECEIVE,
+    RECEIVE(Vec<i16>, BitReceive),
 }
 
 pub struct Demodulator {
@@ -108,8 +126,6 @@ pub struct Demodulator {
     preamble: Vec<i16>,
     last_prod: i64,
     moving_average: i64,
-    wave_buffer: Vec<i16>,
-    data_buffer: Vec<bool>,
 }
 
 impl Demodulator {
@@ -127,57 +143,53 @@ impl Demodulator {
             preamble: bpsk_modulate(preamble.iter(), carrier, len).collect::<Vec<_>>(),
             last_prod: 0,
             moving_average: 1024,
-            wave_buffer: Vec::with_capacity(SECTION_LEN),
-            data_buffer: Vec::with_capacity(DATA_PACK),
         }
     }
 
-    pub fn receive(&mut self, item: i16) -> bool {
-        self.wave_buffer.push(item);
+    pub fn receive(&mut self, item: i16) -> Option<[u8; DATA_PACK / 8]> {
+        if let DemodulateState::RECEIVE(
+            ref mut wave_buffer,
+            ref mut data_buffer,
+        ) = self.state {
+            wave_buffer.push(item);
 
-        if self.wave_buffer.len() == SECTION_LEN {
-            let (i, prod) = (0..2).map(|i| {
+            if wave_buffer.len() == SECTION_LEN {
                 let mut wave = self.carrier;
-                wave.set_t(i * wave.get_rate() / 2);
 
-                let prod = self.wave_buffer.iter()
-                    .zip(wave.iter())
-                    .map(|(a, b)| *a as i64 * b as i64)
-                    .sum::<i64>();
+                let (i, _) = (0..2).map(|i| {
+                    wave.set_t(i * wave.get_rate() / 2);
 
-                (i, prod)
-            }).max_by_key(|(_, prod)| prod.clone()).unwrap();
+                    let prod = wave_buffer.iter()
+                        .zip(wave.iter())
+                        .map(|(a, b)| *a as i64 * b as i64)
+                        .sum::<i64>();
 
+                    (i, prod)
+                }).max_by_key(|(_, prod)| prod.clone()).unwrap();
 
-            // self.data_buffer.push(i / 2 == 1);
-            // self.data_buffer.push(i & 1 == 1);
+                wave_buffer.clear();
 
-            self.data_buffer.push(i == 1);
+                if data_buffer.push(i == 1) == DATA_PACK {
+                    let result = data_buffer.into_array();
 
-            self.wave_buffer.clear();
+                    self.state = DemodulateState::WAITE;
 
-            if self.data_buffer.len() == DATA_PACK {
-                eprintln!("{:?}", self.data_buffer);
-                self.data_buffer.clear();
-                return true;
+                    return Some(result);
+                }
             }
         }
 
-        false
+        None
     }
 
-    pub fn push_back(&mut self, item: i16) {
+    pub fn push_back(&mut self, item: i16) -> Option<[u8; DATA_PACK / 8]> {
         if self.window.len() == self.preamble.len() {
             self.window.pop_front();
         }
 
         self.window.push_back(item);
 
-        if let DemodulateState::RECEIVE = self.state {
-            if self.receive(item) {
-                self.state = DemodulateState::WAITE;
-            }
-        }
+        let ret = self.receive(item);
 
         let threshold = self.moving_average * (1 << 23);
 
@@ -209,11 +221,16 @@ impl Demodulator {
                             eprint!("{} {} {} ", item, threshold, prod);
 
                             if self.last_prod < *last {
-                                for i in self.window.len() - *count..self.window.len() {
+                                let count_copy = *count;
+
+                                let wave_buffer = Vec::with_capacity(SECTION_LEN);
+                                let data_buffer = BitReceive::new();
+
+                                self.state = DemodulateState::RECEIVE(wave_buffer, data_buffer);
+
+                                for i in self.window.len() - count_copy..self.window.len() {
                                     self.receive(self.window[i]);
                                 }
-
-                                self.state = DemodulateState::RECEIVE;
                             } else {
                                 *count = 1;
                                 *last = self.last_prod;
@@ -230,6 +247,8 @@ impl Demodulator {
         } else {
             println!("{}\t{}\t{}", item, threshold, 0);
         }
+
+        ret
     }
 }
 
@@ -330,7 +349,11 @@ fn main() {
         &input_config.into(),
         move |data: &[f32], _| {
             for sample in data.iter() {
-                demodulator.push_back((*sample * std::i16::MAX as f32) as i16);
+                let val = (*sample * std::i16::MAX as f32) as i16;
+
+                if let Some(buffer) = demodulator.push_back(val) {
+                    eprintln!("{:?}", buffer);
+                }
             }
         },
         |err| {
