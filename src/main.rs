@@ -1,6 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::borrow::Borrow;
 use std::collections::VecDeque;
+use std::sync::mpsc::{SyncSender, Receiver, Sender};
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(44100);
@@ -19,6 +20,49 @@ const BARKER: [bool; 11] = [
 ];
 
 // const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
+
+pub struct BitIter {
+    inner: [u8; DATA_PACK / 8],
+    count: usize,
+}
+
+impl BitIter {
+    pub fn new(inner: [u8; DATA_PACK / 8]) -> Self {
+        Self { inner, count: 0 }
+    }
+}
+
+impl Iterator for BitIter {
+    type Item = bool;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count < DATA_PACK {
+            let ret = (self.inner[self.count / 8] >> self.count % 8) & 1 == 1;
+            self.count += 1;
+            Some(ret)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct BitReceive {
+    inner: [u8; DATA_PACK / 8],
+    count: usize,
+}
+
+impl BitReceive {
+    pub fn new() -> Self { Self { inner: [0; DATA_PACK / 8], count: 0 } }
+
+    pub fn push(&mut self, bit: bool) -> usize {
+        self.inner[self.count / 8] & ((bit as u8) << (self.count % 8));
+        self.count += 1;
+        self.count
+    }
+
+    pub fn into_array(self) -> [u8; DATA_PACK / 8] { self.inner }
+}
 
 #[derive(Copy, Clone)]
 pub struct WaveGen {
@@ -132,52 +176,54 @@ impl Demodulator {
         }
     }
 
-    pub fn receive(&mut self, item: i16) -> bool {
-        self.wave_buffer.push(item);
+    pub fn receive(&mut self, item: i16) -> Option<Vec<bool>> {
+        if let DemodulateState::RECEIVE = self.state {
+            self.wave_buffer.push(item);
 
-        if self.wave_buffer.len() == SECTION_LEN {
-            let (i, prod) = (0..2).map(|i| {
-                let mut wave = self.carrier;
-                wave.set_t(i * wave.get_rate() / 2);
+            if self.wave_buffer.len() == SECTION_LEN {
+                let (i, prod) = (0..2).map(|i| {
+                    let mut wave = self.carrier;
+                    wave.set_t(i * wave.get_rate() / 2);
 
-                let prod = self.wave_buffer.iter()
-                    .zip(wave.iter())
-                    .map(|(a, b)| *a as i64 * b as i64)
-                    .sum::<i64>();
+                    let prod = self.wave_buffer.iter()
+                        .zip(wave.iter())
+                        .map(|(a, b)| *a as i64 * b as i64)
+                        .sum::<i64>();
 
-                (i, prod)
-            }).max_by_key(|(_, prod)| prod.clone()).unwrap();
+                    (i, prod)
+                }).max_by_key(|(_, prod)| prod.clone()).unwrap();
 
 
-            // self.data_buffer.push(i / 2 == 1);
-            // self.data_buffer.push(i & 1 == 1);
+                // self.data_buffer.push(i / 2 == 1);
+                // self.data_buffer.push(i & 1 == 1);
 
-            self.data_buffer.push(i == 1);
+                self.data_buffer.push(i == 1);
 
-            self.wave_buffer.clear();
+                self.wave_buffer.clear();
 
-            if self.data_buffer.len() == DATA_PACK {
-                eprintln!("{:?}", self.data_buffer);
-                self.data_buffer.clear();
-                return true;
+                if self.data_buffer.len() == DATA_PACK {
+                    let mut result = Vec::with_capacity(DATA_PACK);
+
+                    std::mem::swap(&mut result, &mut self.data_buffer);
+
+                    self.state = DemodulateState::WAITE;
+
+                    return Some(result);
+                }
             }
         }
 
-        false
+        None
     }
 
-    pub fn push_back(&mut self, item: i16) {
+    pub fn push_back(&mut self, item: i16) -> Option<Vec<bool>> {
         if self.window.len() == self.preamble.len() {
             self.window.pop_front();
         }
 
         self.window.push_back(item);
 
-        if let DemodulateState::RECEIVE = self.state {
-            if self.receive(item) {
-                self.state = DemodulateState::WAITE;
-            }
-        }
+        let ret = self.receive(item);
 
         let threshold = self.moving_average * (1 << 21) * 3;
 
@@ -209,13 +255,15 @@ impl Demodulator {
 
                         if flag {
                             if self.last_prod < *last {
-                                for i in self.window.len() - *count..self.window.len() {
+                                let count_copy = *count;
+
+                                self.state = DemodulateState::RECEIVE;
+
+                                for i in self.window.len() - count_copy..self.window.len() {
                                     self.receive(self.window[i]);
                                 }
 
                                 eprint!("match ");
-
-                                self.state = DemodulateState::RECEIVE;
                             } else {
                                 *count = 1;
                                 *last = self.last_prod;
@@ -232,6 +280,8 @@ impl Demodulator {
         } else {
             println!("{}\t{}\t{}", item, threshold, 0);
         }
+
+        ret
     }
 }
 
@@ -257,6 +307,97 @@ pub fn print_hosts() {
         }
     }
 }
+
+// pub struct AcousticNetwork {
+//     sender: Sender<[u8; DATA_PACK / 8]>,
+//     receiver: Receiver<[u8; DATA_PACK / 8]>,
+// }
+//
+// impl AcousticNetwork {
+//     pub fn new() -> Self {
+//         let output_device = cpal::default_host()
+//             .default_output_device().expect("no output device available");
+//
+//         let input_device = cpal::default_host()
+//             .default_input_device().expect("no input device available");
+//
+//         let output_config = output_device
+//             .supported_output_configs().expect("error while querying configs")
+//             .map(|item| item.with_max_sample_rate())
+//             .filter(|item| item.sample_rate() == SAMPLE_RATE)
+//             .next().expect("expected configuration not found");
+//
+//         let input_config = input_device
+//             .supported_input_configs().expect("error while querying configs")
+//             .map(|item| item.with_max_sample_rate())
+//             .filter(|item| item.sample_rate() == SAMPLE_RATE)
+//             .next().expect("expected configuration not found");
+//
+//         let output_channel = output_config.channels() as usize;
+//
+//         // println!("{:?}: {:#?}", output_device.name(), &output_config);
+//         //
+//         // println!("{:?}: {:#?}", input_device.name(), &input_config);
+//
+//         let (output_sender, output_receiver) = std::sync::mpsc::channel();
+//
+//         let (input_sender, input_receiver) = std::sync::mpsc::channel();
+//
+//         let mut output_buffer = None;
+//
+//         let output_stream = output_device.build_output_stream(
+//             &output_config.into(),
+//             move |data: &mut [f32], _| {
+//                 for sample in data.iter_mut() {
+//                     if let Some(ref mut buffer) = output_buffer {
+//                         if let Some(item) = buffer.next() {
+//                             *sample = item as f32 / std::i16::MAX;
+//                             continue;
+//                         }
+//                     }
+//
+//                     match output_receiver.try_recv() {
+//                         Ok(buffer) => {
+//                             let mut msg = bpsk_modulate(
+//                                 BARKER.iter().cloned().chain(BitIter::new(buffer)), wave, SECTION_LEN,
+//                             );
+//
+//                             *sample = msg.next().unwrap() as f32 / std::i16::MAX;
+//
+//                             output_buffer = Some(msg);
+//                         }
+//                         Err(stream::Empty) => *sample = 0.,
+//                         Err(err) => panic!(err),
+//                     };
+//                 }
+//             },
+//             |err| {
+//                 eprintln!("an error occurred on the output audio stream: {:?}", err);
+//             }).unwrap();
+//
+//         let input_stream = input_device.build_input_stream(
+//             &input_config.into(),
+//             move |data: &[f32], _| {
+//                 for sample in data.iter() {
+//                     if let Some(buffer) = demodulator.push_back((*sample * std::i16::MAX as f32) as i16) {
+//                         input_sender.send(buffer);
+//                     }
+//                 }
+//             },
+//             |err| {
+//                 eprintln!("an error occurred on the inout audio stream: {:?}", err);
+//             }).unwrap();
+//
+//         input_stream.play().unwrap();
+//
+//         output_stream.play().unwrap();
+//
+//         Self {
+//             sender: output_sender,
+//             receiver: input_receiver,
+//         }
+//     }
+// }
 
 fn main() {
     // print_hosts();
@@ -332,7 +473,11 @@ fn main() {
         &input_config.into(),
         move |data: &[f32], _| {
             for sample in data.iter() {
-                demodulator.push_back((*sample * std::i16::MAX as f32) as i16);
+                let val = (*sample * std::i16::MAX as f32) as i16;
+
+                if let Some(buffer) = demodulator.push_back(val) {
+                    eprintln!("{:?}", buffer);
+                }
             }
         },
         |err| {
