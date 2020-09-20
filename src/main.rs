@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(44100);
 const WAVE_LENGTH: usize = 16;
 const SECTION_LEN: usize = 48;
-const DATA_PACK: usize = 256;
+const DATA_PACK: usize = 128;
 
 // const BARKER: [bool; 13] = [
 //     true, true, true, true, true, false, false,
@@ -179,7 +179,7 @@ impl Demodulator {
             }
         }
 
-        let threshold = self.moving_average * (1 << 21) * 3;
+        let threshold = self.moving_average * (1 << 23);
 
         if self.window.len() == self.preamble.len() {
             let prod = self.window.iter()
@@ -189,31 +189,29 @@ impl Demodulator {
 
             self.moving_average = (self.moving_average * 511 + item.abs() as i64) / 512;
 
-            let flag = self.moving_average > 2048 &&
-                prod > threshold &&
-                self.last_prod > prod;
-
-            if flag { eprint!("{} {} {} ", item, threshold, prod); }
+            let flag = self.moving_average > 1024 && self.last_prod > prod;
 
             match self.state {
                 DemodulateState::WAITE => {
-                    if flag {
+                    if flag && prod > threshold {
                         self.state = DemodulateState::MATCH(1, self.last_prod);
+
+                        eprint!("{} {} {} ", item, threshold, prod);
                     }
                 }
                 DemodulateState::MATCH(ref mut count, ref mut last) => {
-                    if *count > WAVE_LENGTH * 2 {
+                    if *count >= WAVE_LENGTH * 2 {
                         self.state = DemodulateState::WAITE;
                     } else {
                         *count += 1;
 
-                        if flag {
+                        if flag && *count >= WAVE_LENGTH {
+                            eprint!("{} {} {} ", item, threshold, prod);
+
                             if self.last_prod < *last {
                                 for i in self.window.len() - *count..self.window.len() {
                                     self.receive(self.window[i]);
                                 }
-
-                                eprint!("match ");
 
                                 self.state = DemodulateState::RECEIVE;
                             } else {
@@ -298,9 +296,9 @@ fn main() {
         std::iter::empty()
             .chain(std::iter::repeat([true].iter().cloned()).flatten().take(256))
             .chain(BARKER.iter().cloned())
-            .chain(std::iter::repeat([true].iter().cloned()).flatten().take(DATA_PACK))
+            .chain(std::iter::repeat([true, true, true, false, false, false, false, false].iter().cloned()).flatten().take(DATA_PACK))
             .chain(BARKER.iter().cloned())
-            .chain(std::iter::repeat([false].iter().cloned()).flatten().take(DATA_PACK)),
+            .chain(std::iter::repeat([false, false, false, true, false, false, false, false].iter().cloned()).flatten().take(DATA_PACK)),
         wave, SECTION_LEN);
 
     let mut msg_channel = msg
