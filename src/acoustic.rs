@@ -5,9 +5,8 @@ use cpal::{
 };
 use crate::{
     SAMPLE_RATE, BARKER, WAVE_LENGTH,
-    wave::Wave,
     bit_set::DataPack,
-    module::{assemble_data_pack, Demodulator},
+    module::{Wave, Modulator, Demodulator},
 };
 
 
@@ -88,38 +87,40 @@ impl AcousticSender {
 
         // println!("{:?}: {:#?}", output_device.name(), &output_config);
 
+        let modulator = Modulator::new(carrier, len);
+
         let channel = config.channels() as usize;
 
         let channel_handler = move |item| {
             std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
         };
 
-        let idle_signal = move |carrier: Wave, phase, len| {
+        let idle_signal = move |phase, len| {
             SenderState::Idle(carrier.iter(phase).take(len).map(channel_handler).flatten())
         };
 
-        let message_signal = move |buffer, carrier, len| {
-            SenderState::Message(assemble_data_pack(buffer, carrier, len).map(channel_handler).flatten())
+        let message_signal = move |buffer| {
+            SenderState::Message(modulator.iter(buffer).map(channel_handler).flatten())
         };
 
         let (sender, receiver) = std::sync::mpsc::channel();
 
-        let mut output_buffer = idle_signal(carrier, 0, 8192);
+        let mut buffer = idle_signal(0, 8192);
 
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _| {
                 for sample in data.iter_mut() {
-                    let value = if let Some(item) = output_buffer.next() {
+                    let value = if let Some(item) = buffer.next() {
                         item
                     } else {
-                        output_buffer = match receiver.try_recv() {
-                            Ok(buffer) => message_signal(buffer, carrier, len),
-                            Err(TryRecvError::Empty) => idle_signal(carrier, 0, Self::IDLE_SECTION),
+                        buffer = match receiver.try_recv() {
+                            Ok(buffer) => message_signal(buffer),
+                            Err(TryRecvError::Empty) => idle_signal(0, Self::IDLE_SECTION),
                             Err(err) => panic!(err),
                         };
 
-                        output_buffer.next().unwrap()
+                        buffer.next().unwrap()
                     };
 
                     *sample = Sample::from(&value);
@@ -160,11 +161,11 @@ impl AcousticReceiver {
 
         // println!("{:?}: {:#?}", input_device.name(), &input_config);
 
+        let mut demodulator = Demodulator::new(BARKER.iter(), carrier, len);
+
         // let channel_count = config.channels() as usize;
 
         let (sender, receiver) = std::sync::mpsc::channel();
-
-        let mut demodulator = Demodulator::new(BARKER.iter(), carrier, len);
 
         let stream = device.build_input_stream(
             &config.into(),

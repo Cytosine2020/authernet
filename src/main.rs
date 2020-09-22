@@ -1,11 +1,9 @@
-pub mod wave;
 pub mod bit_set;
 pub mod acoustic;
 pub mod module;
 
 use acoustic::{AcousticSender, AcousticReceiver};
-use wave::Wave;
-
+use module::Wave;
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(44100);
 const WAVE_LENGTH: usize = 16;
@@ -34,8 +32,8 @@ fn compare(receiver: &AcousticReceiver, sender: &AcousticSender, i: u8)
     let recv = receiver.recv()?;
 
     if send != recv {
-        println!("->{:?}", send);
-        println!("<-{:?}", recv);
+        println!("-> {:?}", send);
+        println!("<- {:?}", recv);
     }
 
     Ok(())

@@ -4,10 +4,35 @@ use std::{
 };
 use crate::{
     DATA_PACK_SIZE, BARKER, SECTION_LEN, WAVE_LENGTH,
-    wave::Wave,
     bit_set::{DataPack, BitReceive, BitIter},
 };
 
+
+#[derive(Copy, Clone)]
+pub struct Wave {
+    rate: usize,
+    amp: usize,
+}
+
+impl Wave {
+    pub fn calculate(&self, t: usize) -> i16 {
+        ((t as f32 * 2. * std::f32::consts::PI / self.rate as f32).sin() * self.amp as f32) as i16
+    }
+
+    pub fn new(rate: usize, amp: usize) -> Self { Self { rate, amp } }
+
+    pub fn get_rate(&self) -> usize { self.rate }
+
+    pub fn iter(&self, t: usize) -> impl Iterator<Item=i16> {
+        let mut wave = (0..self.rate).into_iter()
+            .map(|i| self.calculate(i))
+            .collect::<VecDeque<_>>();
+
+        wave.rotate_left(t % self.rate);
+
+        wave.into_iter().cycle()
+    }
+}
 
 fn bpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Item=i16>
     where I: Iterator, I::Item: Borrow<bool>,
@@ -17,13 +42,22 @@ fn bpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Item=i1
     }).flatten()
 }
 
-pub fn assemble_data_pack(buffer: DataPack, carrier: Wave, len: usize) -> impl Iterator<Item=i16> {
-    bpsk_modulate(
-        std::iter::empty()
-            // .chain([false, false, false, false, false].iter().cloned())
-            .chain(BARKER.iter().cloned())
-            .chain(BitIter::new(buffer)),
-        carrier, len)
+pub struct Modulator {
+    carrier: Wave,
+    len: usize,
+}
+
+impl Modulator {
+    pub fn new(carrier: Wave, len: usize) -> Self { Self { carrier, len } }
+
+    pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
+        bpsk_modulate(
+            std::iter::empty()
+                // .chain([false, false, false, false, false].iter().cloned())
+                .chain(BARKER.iter().cloned())
+                .chain(BitIter::new(buffer)),
+            self.carrier, self.len)
+    }
 }
 
 enum DemodulateState {
@@ -114,10 +148,8 @@ impl Demodulator {
         if self.window.len() == self.preamble.len() {
             let prod = Self::dot_product(self.window.iter(), self.preamble.iter());
 
-            self.moving_average
-                = Self::moving_average(self.moving_average,
-                (item as i64).abs(),
-                Self::MOVING_AVERAGE,
+            self.moving_average = Self::moving_average(
+                self.moving_average, (item as i64).abs(), Self::MOVING_AVERAGE,
             );
 
             let flag = self.moving_average > Self::ACTIVE_THRESHOLD && self.last_prod > prod;
@@ -164,7 +196,7 @@ impl Demodulator {
 
             self.last_prod = prod;
 
-            // eprintln!("{}\t{}", threshold, prod);
+            eprintln!("{}\t{}", threshold, prod);
         } else {
             // eprintln!("{}\t{}", threshold, 0);
         }
