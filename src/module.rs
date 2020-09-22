@@ -1,40 +1,36 @@
-use std::{
-    borrow::Borrow,
-    collections::VecDeque,
-};
+use std::{borrow::Borrow, collections::VecDeque};
 use crate::{
     DATA_PACK_SIZE, BARKER, SECTION_LEN, WAVE_LENGTH,
     bit_set::{DataPack, BitReceive, BitIter},
 };
 
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct Wave {
-    rate: usize,
-    amp: usize,
+    wave: Vec<i16>,
 }
 
 impl Wave {
-    pub fn calculate(&self, t: usize) -> i16 {
-        ((t as f32 * 2. * std::f32::consts::PI / self.rate as f32).sin() * self.amp as f32) as i16
+    pub fn calculate(rate: usize, amp: usize, t: usize) -> i16 {
+        ((t as f32 * 2. * std::f32::consts::PI / rate as f32).sin() * amp as f32) as i16
     }
 
-    pub fn new(rate: usize, amp: usize) -> Self { Self { rate, amp } }
+    pub fn new(rate: usize, amp: usize) -> Self {
+        let wave = (0..rate).into_iter()
+            .map(|i| Self::calculate(rate, amp, i))
+            .collect::<Vec<_>>();
 
-    pub fn get_rate(&self) -> usize { self.rate }
+        Self { wave }
+    }
+
+    pub fn get_rate(&self) -> usize { self.wave.len() }
 
     pub fn iter(&self, t: usize) -> impl Iterator<Item=i16> {
-        let mut wave = (0..self.rate).into_iter()
-            .map(|i| self.calculate(i))
-            .collect::<VecDeque<_>>();
-
-        wave.rotate_left(t % self.rate);
-
-        wave.into_iter().cycle()
+        self.wave.clone().into_iter().cycle().skip(t % self.get_rate())
     }
 }
 
-fn bpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Item=i16>
+pub fn bpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Item=i16>
     where I: Iterator, I::Item: Borrow<bool>,
 {
     iter.map(move |bit| {
@@ -48,15 +44,13 @@ pub struct Modulator {
 }
 
 impl Modulator {
-    pub fn new(carrier: Wave, len: usize) -> Self { Self { carrier, len } }
+    pub fn new(carrier: &Wave, len: usize) -> Self { Self { carrier: carrier.clone(), len } }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        bpsk_modulate(
-            std::iter::empty()
-                // .chain([false, false, false, false, false].iter().cloned())
-                .chain(BARKER.iter().cloned())
-                .chain(BitIter::new(buffer)),
-            self.carrier, self.len)
+        let iter = BARKER.iter().cloned()
+            .chain(BitIter::new(buffer));
+
+        bpsk_modulate(iter, self.carrier.clone(), self.len)
     }
 }
 
@@ -93,17 +87,12 @@ impl Demodulator {
         (last * (constant - 1) + new) / constant
     }
 
-    pub fn new<I>(preamble_: I, carrier: Wave, len: usize) -> Self
-        where I: Iterator, I::Item: Borrow<bool>,
-    {
-        let preamble = preamble_
-            .map(|item| *item.borrow()).collect::<Vec<_>>();
-
+    pub fn new(preamble: Vec<i16>, carrier: &Wave, len: usize) -> Self {
         Self {
             window: VecDeque::with_capacity(preamble.len() * len),
             state: DemodulateState::WAITE,
-            carrier,
-            preamble: bpsk_modulate(preamble.iter(), carrier, len).collect::<Vec<_>>(),
+            carrier: carrier.clone(),
+            preamble,
             last_prod: 0,
             moving_average: 1024,
         }
@@ -196,9 +185,7 @@ impl Demodulator {
 
             self.last_prod = prod;
 
-            eprintln!("{}\t{}", threshold, prod);
-        } else {
-            // eprintln!("{}\t{}", threshold, 0);
+            // eprintln!("{}\t{}", threshold, prod);
         }
 
         ret

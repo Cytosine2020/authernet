@@ -1,12 +1,12 @@
-use std::sync::mpsc::{Receiver, RecvError, TryRecvError, Sender, SendError};
+use std::sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError};
 use cpal::{
-    traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, Sample, SupportedStreamConfig,
+    traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crate::{
     SAMPLE_RATE, BARKER, WAVE_LENGTH,
     bit_set::DataPack,
-    module::{Wave, Modulator, Demodulator},
+    module::{bpsk_modulate, Wave, Modulator, Demodulator},
 };
 
 
@@ -47,16 +47,10 @@ impl<I, U> Iterator for SenderState<I, U>
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Message(ref mut iter) => {
-                match iter.next() {
-                    Some(item) => Some(item.into()),
-                    None => None,
-                }
+                iter.next().map(|item| item.into())
             }
             Self::Idle(ref mut iter) => {
-                match iter.next() {
-                    Some(item) => Some(item.into()),
-                    None => None,
-                }
+                iter.next().map(|item| item.into())
             }
         }
     }
@@ -82,12 +76,12 @@ impl AcousticSender {
         Ok((device, config))
     }
 
-    pub fn new(carrier: Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
         // println!("{:?}: {:#?}", output_device.name(), &output_config);
 
-        let modulator = Modulator::new(carrier, len);
+        let modulator = Modulator::new(&carrier, len);
 
         let channel = config.channels() as usize;
 
@@ -95,15 +89,17 @@ impl AcousticSender {
             std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
         };
 
+        let carrier_clone = carrier.clone();
+
         let idle_signal = move |phase, len| {
-            SenderState::Idle(carrier.iter(phase).take(len).map(channel_handler).flatten())
+            SenderState::Idle(carrier_clone.iter(phase).take(len).map(channel_handler).flatten())
         };
 
         let message_signal = move |buffer| {
             SenderState::Message(modulator.iter(buffer).map(channel_handler).flatten())
         };
 
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
 
         let mut buffer = idle_signal(0, 8192);
 
@@ -111,9 +107,7 @@ impl AcousticSender {
             &config.into(),
             move |data: &mut [f32], _| {
                 for sample in data.iter_mut() {
-                    let value = if let Some(item) = buffer.next() {
-                        item
-                    } else {
+                    let value = buffer.next().unwrap_or_else(|| {
                         buffer = match receiver.try_recv() {
                             Ok(buffer) => message_signal(buffer),
                             Err(TryRecvError::Empty) => idle_signal(0, Self::IDLE_SECTION),
@@ -121,7 +115,7 @@ impl AcousticSender {
                         };
 
                         buffer.next().unwrap()
-                    };
+                    });
 
                     *sample = Sample::from(&value);
                 }
@@ -156,16 +150,19 @@ impl AcousticReceiver {
         Ok((device, config))
     }
 
-    pub fn new(carrier: Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
         // println!("{:?}: {:#?}", input_device.name(), &input_config);
 
-        let mut demodulator = Demodulator::new(BARKER.iter(), carrier, len);
+        let preamble = bpsk_modulate(BARKER.iter(), carrier.clone(), len)
+            .collect::<Vec<_>>();
+
+        let mut demodulator = Demodulator::new(preamble, carrier, len);
 
         // let channel_count = config.channels() as usize;
 
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
 
         let stream = device.build_input_stream(
             &config.into(),

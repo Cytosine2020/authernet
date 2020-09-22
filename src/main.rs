@@ -44,9 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let wave = Wave::new(WAVE_LENGTH, std::i16::MAX as usize);
 
-    let receiver = AcousticReceiver::new(wave, SECTION_LEN)?;
+    let receiver = AcousticReceiver::new(&wave, SECTION_LEN)?;
 
-    let sender = AcousticSender::new(wave, SECTION_LEN)?;
+    let sender = AcousticSender::new(&wave, SECTION_LEN)?;
 
     for i in 0..=255 {
         compare(&receiver, &sender, i)?;
