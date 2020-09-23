@@ -47,7 +47,8 @@ impl Modulator {
     pub fn new(carrier: &Wave, len: usize) -> Self { Self { carrier: carrier.clone(), len } }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        let iter = BARKER.iter().cloned()
+        let iter = [false, true, false, true, false].iter()
+            .chain(BARKER.iter()).cloned()
             .chain(BitIter::new(buffer));
 
         bpsk_modulate(iter, self.carrier.clone(), self.len)
@@ -70,9 +71,9 @@ pub struct Demodulator {
 }
 
 impl Demodulator {
-    const HEADER_THRESHOLD_SCALE: i64 = 1 << 23;
+    const HEADER_THRESHOLD_SCALE: i64 = (1 << 21) * 3;
     const MOVING_AVERAGE: i64 = 512;
-    const ACTIVE_THRESHOLD: i64 = 1024;
+    const ACTIVE_THRESHOLD: i64 = 512;
 
     fn dot_product<I, U>(iter_a: I, iter_b: U) -> i64
         where I: Iterator<Item=i16>, U: Iterator<Item=i16>,
@@ -132,17 +133,21 @@ impl Demodulator {
                     self.window.iter().cloned(), self.preamble.iter().cloned(),
                 );
 
+                let last_prod = self.last_prod;
+
+                self.last_prod = prod;
+
                 if *count >= WAVE_LENGTH * 2 {
                     self.state = DemodulateState::WAITE;
                 } else {
                     *count += 1;
 
-                    if self.last_prod > prod && *count >= WAVE_LENGTH {
+                    if last_prod > prod && *count >= WAVE_LENGTH {
                         // print!("{} {} {} ", item, threshold, prod);
 
                         let count_copy = *count;
 
-                        self.state = if self.last_prod < *last {
+                        self.state = if last_prod < *last {
                             if BARKER.iter().enumerate().skip(1)
                                 .all(|(index, bit)| {
                                     let prod = Self::dot_product(
@@ -159,6 +164,8 @@ impl Demodulator {
 
                                 DemodulateState::RECEIVE(count_copy, BitReceive::new())
                             } else {
+                                // println!("preamble decode failed");
+
                                 DemodulateState::WAITE
                             }
                         } else {
@@ -166,8 +173,6 @@ impl Demodulator {
                         };
                     }
                 }
-
-                self.last_prod = prod;
             }
             DemodulateState::RECEIVE(
                 ref mut wave_count, ref mut data_buffer,
@@ -187,7 +192,7 @@ impl Demodulator {
 
                         self.state = DemodulateState::WAITE;
 
-                        self.window.clear();
+                        self.window.drain(..self.window.len() - SECTION_LEN);
 
                         return Some(result);
                     }
