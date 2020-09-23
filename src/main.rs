@@ -5,6 +5,7 @@ pub mod module;
 use acoustic::{AcousticSender, AcousticReceiver};
 use module::Wave;
 
+
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(44100);
 const WAVE_LENGTH: usize = 16;
 const SECTION_LEN: usize = 48;
@@ -51,10 +52,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..=255 {
         compare(&receiver, &sender, i)?;
     }
-
-    // compare(&receiver, &sender, 7)?;
-    //
-    // compare(&receiver, &sender, 8)?;
 
     Ok(())
 }

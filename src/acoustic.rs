@@ -33,25 +33,20 @@ pub fn print_hosts() {
     }
 }
 
-enum SenderState<I, U> {
+enum ChannelState<I, U> {
     Message(I),
     Idle(U),
 }
 
-impl<I, U> Iterator for SenderState<I, U>
-    where I: Iterator, I::Item: Into<i16>,
-          U: Iterator, U::Item: Into<i16>,
+impl<I, U> Iterator for ChannelState<I, U>
+    where I: Iterator<Item=i16>, U: Iterator<Item=i16>,
 {
     type Item = i16;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Message(ref mut iter) => {
-                iter.next().map(|item| item.into())
-            }
-            Self::Idle(ref mut iter) => {
-                iter.next().map(|item| item.into())
-            }
+            Self::Message(ref mut iter) => iter.next(),
+            Self::Idle(ref mut iter) => iter.next(),
         }
     }
 }
@@ -81,7 +76,7 @@ impl AcousticSender {
 
         // println!("{:?}: {:#?}", output_device.name(), &output_config);
 
-        let modulator = Modulator::new(&carrier, len);
+        let modulator = Modulator::new(carrier, len);
 
         let channel = config.channels() as usize;
 
@@ -91,17 +86,17 @@ impl AcousticSender {
 
         let carrier_clone = carrier.clone();
 
-        let idle_signal = move |phase, len| {
-            SenderState::Idle(carrier_clone.iter(phase).take(len).map(channel_handler).flatten())
+        let idle_signal = move |len| {
+            ChannelState::Idle(carrier_clone.iter(0).take(len).map(channel_handler).flatten())
         };
 
         let message_signal = move |buffer| {
-            SenderState::Message(modulator.iter(buffer).map(channel_handler).flatten())
+            ChannelState::Message(modulator.iter(buffer).map(channel_handler).flatten())
         };
 
         let (sender, receiver) = mpsc::channel();
 
-        let mut buffer = idle_signal(0, 8192);
+        let mut buffer = idle_signal(8192);
 
         let stream = device.build_output_stream(
             &config.into(),
@@ -110,7 +105,7 @@ impl AcousticSender {
                     let value = buffer.next().unwrap_or_else(|| {
                         buffer = match receiver.try_recv() {
                             Ok(buffer) => message_signal(buffer),
-                            Err(TryRecvError::Empty) => idle_signal(0, Self::IDLE_SECTION),
+                            Err(TryRecvError::Empty) => idle_signal(Self::IDLE_SECTION),
                             Err(err) => panic!(err),
                         };
 
@@ -155,7 +150,7 @@ impl AcousticReceiver {
 
         // println!("{:?}: {:#?}", input_device.name(), &input_config);
 
-        let preamble = bpsk_modulate(BARKER.iter(), carrier.clone(), len)
+        let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone(), len)
             .collect::<Vec<_>>();
 
         let mut demodulator = Demodulator::new(preamble, carrier, len);
