@@ -1,8 +1,21 @@
 use std::collections::VecDeque;
 use crate::{
-    DATA_PACK_SIZE, BARKER, SECTION_LEN, WAVE_LENGTH,
+    DATA_PACK_SIZE, SECTION_LEN, WAVE_LENGTH,
     bit_set::{DataPack, BitReceive, BitIter},
 };
+
+
+// const BARKER: [bool; 13] = [
+//     true, true, true, true, true, false, false,
+//     true, true, false, true, false, true
+// ];
+
+const BARKER: [bool; 11] = [
+    true, true, true, false, false, false,
+    true, false, false, true, false
+];
+
+// const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
 #[derive(Clone)]
@@ -38,6 +51,40 @@ pub fn bpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Ite
     }).flatten()
 }
 
+pub struct Chunk<I> {
+    iter: I,
+}
+
+impl<I> Chunk<I> {
+    pub fn new(iter: I) -> Self { Self { iter } }
+}
+
+impl<I> Iterator for Chunk<I>
+    where I: Iterator<Item=bool>,
+{
+    type Item = (I::Item, I::Item);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.iter.next() {
+            Some(item_a) => {
+                match self.iter.next() {
+                    Some(item_b) => Some((item_a, item_b)),
+                    None => panic!(),
+                }
+            }
+            None => None,
+        }
+    }
+}
+
+pub fn qpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Item=i16>
+    where I: Iterator<Item=bool>,
+{
+    Chunk::new(iter).map(move |(bit_a, bit_b)| {
+        carrier.iter((bit_a as usize * 2 + bit_b as usize) * carrier.get_rate() / 4).take(len)
+    }).flatten()
+}
+
 pub struct Modulator {
     carrier: Wave,
     len: usize,
@@ -47,11 +94,11 @@ impl Modulator {
     pub fn new(carrier: &Wave, len: usize) -> Self { Self { carrier: carrier.clone(), len } }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        let iter = [false, true, false, true, false].iter()
-            .chain(BARKER.iter()).cloned()
-            .chain(BitIter::new(buffer));
-
-        bpsk_modulate(iter, self.carrier.clone(), self.len)
+        std::iter::empty()
+            .chain(bpsk_modulate([false, true, false, true, false].iter()
+                                     .chain(BARKER.iter()).cloned(),
+                                 self.carrier.clone(), self.len))
+            .chain(qpsk_modulate(BitIter::new(buffer), self.carrier.clone(), self.len))
     }
 }
 
@@ -71,7 +118,7 @@ pub struct Demodulator {
 }
 
 impl Demodulator {
-    const HEADER_THRESHOLD_SCALE: i64 = (1 << 21) * 3;
+    const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
     const MOVING_AVERAGE: i64 = 512;
     const ACTIVE_THRESHOLD: i64 = 512;
 
@@ -85,7 +132,10 @@ impl Demodulator {
         (last * (constant - 1) + new) / constant
     }
 
-    pub fn new(preamble: Vec<i16>, carrier: &Wave, len: usize) -> Self {
+    pub fn new(carrier: &Wave, len: usize) -> Self {
+        let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone(), len)
+            .collect::<Vec<_>>();
+
         Self {
             window: VecDeque::with_capacity(preamble.len() * len),
             state: DemodulateState::WAITE,
@@ -180,14 +230,25 @@ impl Demodulator {
                 *wave_count += 1;
 
                 if *wave_count == SECTION_LEN {
-                    let prod = Self::dot_product(
-                        self.window.iter().skip(self.window.len() - *wave_count).cloned(),
-                        self.carrier.iter(0),
-                    );
+                    let wave = self.carrier.clone();
+
+                    let mut result = [(0usize, 0i64); 4];
+
+                    for i in 0..4 {
+                        let prod = Self::dot_product(
+                            self.window.iter().skip(self.window.len() - *wave_count).cloned(),
+                            wave.iter(i * wave.get_rate() / 4),
+                        );
+
+                        result[i] = (i, prod);
+                    };
 
                     *wave_count = 0;
 
-                    if data_buffer.push(prod < 0) == DATA_PACK_SIZE {
+                    let (i, _) = result.iter().max_by_key(|(_, prod)| *prod).unwrap();
+
+                    if data_buffer.push(*i / 2 == 1) == DATA_PACK_SIZE ||
+                        data_buffer.push(*i & 1 == 1) == DATA_PACK_SIZE {
                         let result = data_buffer.into_array();
 
                         self.state = DemodulateState::WAITE;

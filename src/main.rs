@@ -14,20 +14,9 @@ use core::convert::TryInto;
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const WAVE_LENGTH: usize = 16;
-const SECTION_LEN: usize = 48;
-const DATA_PACK_SIZE: usize = 128;
+const SECTION_LEN: usize = 64;
+const DATA_PACK_SIZE: usize = 256;
 
-// const BARKER: [bool; 13] = [
-//     true, true, true, true, true, false, false,
-//     true, true, false, true, false, true
-// ];
-
-const BARKER: [bool; 11] = [
-    true, true, true, false, false, false,
-    true, false, false, true, false
-];
-
-// const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 pub fn compare(receiver: &AcousticReceiver, sender: &AcousticSender, i: u8)
                -> Result<(), Box<dyn std::error::Error>>
@@ -57,23 +46,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let receiver = AcousticReceiver::new(&wave, SECTION_LEN)?;
 
-    // let sender = AcousticSender::new(&wave, SECTION_LEN)?;
-    //
-    // for i in 0..=255 {
-    //     compare(&receiver, &sender, i)?;
-    // }
-
-    // println!("{:?}", receiver.recv()?);
-    //
-    // println!("{:?}", receiver.recv()?);
+    let sender = AcousticSender::new(&wave, SECTION_LEN)?;
 
     for i in 0..=255 {
-        let buf = receiver.recv()?;
-
-        if buf != [i; DATA_PACK_SIZE / 8] {
-            println!("{} {:?}", i, buf);
-        }
+        compare(&receiver, &sender, i)?;
     }
+
+    // for i in 0..=255 {
+    //     let buf = receiver.recv()?;
+    //
+    //     if buf != [i; DATA_PACK_SIZE / 8] {
+    //         println!("{} {:?}", i, buf);
+    //     }
+    // }
 
     // if args[1] == "-s" {
     //     let sender = AcousticSender::new(&wave, SECTION_LEN)?;

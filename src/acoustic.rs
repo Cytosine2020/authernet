@@ -4,9 +4,9 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crate::{
-    SAMPLE_RATE, BARKER, WAVE_LENGTH,
+    SAMPLE_RATE, WAVE_LENGTH,
     bit_set::DataPack,
-    module::{bpsk_modulate, Wave, Modulator, Demodulator},
+    module::{Wave, Modulator, Demodulator},
 };
 
 
@@ -150,10 +150,7 @@ impl AcousticReceiver {
 
         // println!("{:?}: {:#?}", input_device.name(), &input_config);
 
-        let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone(), len)
-            .collect::<Vec<_>>();
-
-        let mut demodulator = Demodulator::new(preamble, carrier, len);
+        let mut demodulator = Demodulator::new(carrier, len);
 
         // let channel_count = config.channels() as usize;
 
