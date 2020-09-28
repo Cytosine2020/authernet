@@ -1,4 +1,7 @@
-use std::sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError};
+use std::{
+    cmp::min,
+    sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError},
+};
 use cpal::{
     Device, Sample, SupportedStreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -75,7 +78,7 @@ impl AcousticSender {
     pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
-        // println!("{:?}: {:#?}", output_device.name(), &output_config);
+        // println!("{:?}: {:#?}", device.name(), &config);
 
         let modulator = Modulator::new(carrier.deep_clone(), len);
 
@@ -149,20 +152,25 @@ impl AcousticReceiver {
     pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
-        // println!("{:?}: {:#?}", input_device.name(), &input_config);
+        // println!("{:?}: {:#?}", device.name(), &config);
 
         let mut demodulator = Demodulator::new(carrier.deep_clone(), len);
 
-        // let channel_count = config.channels() as usize;
+        let channel_count = config.channels() as usize;
 
         let (sender, receiver) = mpsc::channel();
+
+        let mut channel = 0;
 
         let stream = device.build_input_stream(
             &config.into(),
             move |data: &[f32], _| {
                 for sample in data.iter() {
                     if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
-                        sender.send(buffer).unwrap();
+                        if channel == 0 { sender.send(buffer).unwrap(); }
+
+                        channel += 1;
+                        if channel == channel_count { channel = 0; }
                     }
                 }
             },
