@@ -1,34 +1,25 @@
 use std::collections::VecDeque;
 use crate::{
-    DATA_PACK_SIZE, BARKER, SECTION_LEN, WAVE_LENGTH,
+    DATA_PACK_SIZE, SECTION_LEN, WAVE_LENGTH,
+    wave::Wave,
     bit_set::{DataPack, BitReceive, BitIter},
 };
 
 
-#[derive(Clone)]
-pub struct Wave {
-    wave: Vec<i16>,
-}
+const PRE_PREAMBLE: [bool; 5] = [false, true, false, true, false];
 
-impl Wave {
-    pub fn calculate(rate: usize, amp: usize, t: usize) -> i16 {
-        ((t as f32 * 2. * std::f32::consts::PI / rate as f32).sin() * amp as f32) as i16
-    }
+// const BARKER: [bool; 13] = [
+//     true, true, true, true, true, false, false,
+//     true, true, false, true, false, true
+// ];
 
-    pub fn new(rate: usize, amp: usize) -> Self {
-        let wave = (0..rate).into_iter()
-            .map(|i| Self::calculate(rate, amp, i))
-            .collect::<Vec<_>>();
+const BARKER: [bool; 11] = [
+    true, true, true, false, false, false,
+    true, false, false, true, false
+];
 
-        Self { wave }
-    }
+// const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
-    pub fn get_rate(&self) -> usize { self.wave.len() }
-
-    pub fn iter(&self, t: usize) -> impl Iterator<Item=i16> {
-        self.wave.clone().into_iter().cycle().skip(t % self.get_rate())
-    }
-}
 
 pub fn bpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Item=i16>
     where I: Iterator<Item=bool>,
@@ -44,14 +35,14 @@ pub struct Modulator {
 }
 
 impl Modulator {
-    pub fn new(carrier: &Wave, len: usize) -> Self { Self { carrier: carrier.clone(), len } }
+    pub fn new(carrier: Wave, len: usize) -> Self { Self { carrier, len } }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        let iter = [false, true, false, true, false].iter()
-            .chain(BARKER.iter()).cloned()
-            .chain(BitIter::new(buffer));
+        let preamble = PRE_PREAMBLE.iter().chain(BARKER.iter()).cloned();
 
-        bpsk_modulate(iter, self.carrier.clone(), self.len)
+        std::iter::empty()
+            .chain(bpsk_modulate(preamble, self.carrier.clone(), self.len))
+            .chain(bpsk_modulate(BitIter::new(buffer), self.carrier.clone(), self.len))
     }
 }
 
@@ -71,7 +62,9 @@ pub struct Demodulator {
 }
 
 impl Demodulator {
-    const HEADER_THRESHOLD_SCALE: i64 = (1 << 21) * 3;
+    const WINDOW_EXTRA_SIZE: usize = SECTION_LEN * PRE_PREAMBLE.len();
+
+    const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
     const MOVING_AVERAGE: i64 = 512;
     const ACTIVE_THRESHOLD: i64 = 512;
 
@@ -81,40 +74,42 @@ impl Demodulator {
         iter_a.zip(iter_b).map(|(a, b)| a as i64 * b as i64).sum::<i64>()
     }
 
-    fn moving_average(last: i64, new: i64, constant: i64) -> i64 {
-        (last * (constant - 1) + new) / constant
+    fn moving_average(last: i64, new: i64) -> i64 {
+        (last * (Self::MOVING_AVERAGE - 1) + new) / Self::MOVING_AVERAGE
     }
 
-    pub fn new(preamble: Vec<i16>, carrier: &Wave, len: usize) -> Self {
+    pub fn new(carrier: Wave, len: usize) -> Self {
+        let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone(), len)
+            .collect::<Vec<_>>();
+
         Self {
-            window: VecDeque::with_capacity(preamble.len() * len),
+            window: VecDeque::with_capacity(BARKER.len() + Self::WINDOW_EXTRA_SIZE),
             state: DemodulateState::WAITE,
-            carrier: carrier.clone(),
+            carrier,
             preamble,
             last_prod: 0,
-            moving_average: 1024,
+            moving_average: 0,
         }
     }
 
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
-        if self.window.len() == self.preamble.len() {
+        if self.window.len() == self.preamble.len() + Self::WINDOW_EXTRA_SIZE {
             self.window.pop_front();
         }
 
         self.window.push_back(item);
 
-        self.moving_average = Self::moving_average(
-            self.moving_average, (item as i64).abs(), Self::MOVING_AVERAGE,
-        );
+        self.moving_average = Self::moving_average(self.moving_average, (item as i64).abs());
 
         let threshold = self.moving_average * Self::HEADER_THRESHOLD_SCALE;
 
         match self.state {
             DemodulateState::WAITE => {
-                if self.window.len() == self.preamble.len() &&
+                if self.window.len() >= self.preamble.len() &&
                     self.moving_average > Self::ACTIVE_THRESHOLD {
                     let prod = Self::dot_product(
-                        self.window.iter().cloned(), self.preamble.iter().cloned(),
+                        self.window.iter().skip(Self::WINDOW_EXTRA_SIZE).cloned(),
+                        self.preamble.iter().cloned(),
                     );
 
                     if prod > threshold && self.last_prod > prod {
@@ -130,7 +125,8 @@ impl Demodulator {
             }
             DemodulateState::MATCH(ref mut count, ref mut last) => {
                 let prod = Self::dot_product(
-                    self.window.iter().cloned(), self.preamble.iter().cloned(),
+                    self.window.iter().skip(Self::WINDOW_EXTRA_SIZE).cloned(),
+                    self.preamble.iter().cloned(),
                 );
 
                 let last_prod = self.last_prod;
@@ -148,11 +144,13 @@ impl Demodulator {
                         let count_copy = *count;
 
                         self.state = if last_prod < *last {
-                            if BARKER.iter().enumerate().skip(1)
+                            if BARKER.iter().enumerate()
                                 .all(|(index, bit)| {
+                                    let shift = Self::WINDOW_EXTRA_SIZE - count_copy;
+
                                     let prod = Self::dot_product(
                                         self.window.iter()
-                                            .skip(index * SECTION_LEN - count_copy).cloned(),
+                                            .skip(shift + index * SECTION_LEN).cloned(),
                                         self.carrier.iter(0).take(SECTION_LEN),
                                     );
 
@@ -174,21 +172,19 @@ impl Demodulator {
                     }
                 }
             }
-            DemodulateState::RECEIVE(
-                ref mut wave_count, ref mut data_buffer,
-            ) => {
-                *wave_count += 1;
+            DemodulateState::RECEIVE(ref mut count, ref mut buffer) => {
+                *count += 1;
 
-                if *wave_count == SECTION_LEN {
+                if *count == SECTION_LEN {
                     let prod = Self::dot_product(
-                        self.window.iter().skip(self.window.len() - *wave_count).cloned(),
+                        self.window.iter().skip(self.window.len() - *count).cloned(),
                         self.carrier.iter(0),
                     );
 
-                    *wave_count = 0;
+                    *count = 0;
 
-                    if data_buffer.push(prod < 0) == DATA_PACK_SIZE {
-                        let result = data_buffer.into_array();
+                    if buffer.push(prod < 0) == DATA_PACK_SIZE {
+                        let result = buffer.into_array();
 
                         self.state = DemodulateState::WAITE;
 

@@ -4,9 +4,10 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crate::{
-    SAMPLE_RATE, BARKER, WAVE_LENGTH,
+    SAMPLE_RATE, WAVE_LENGTH,
+    wave::Wave,
     bit_set::DataPack,
-    module::{bpsk_modulate, Wave, Modulator, Demodulator},
+    module::{Modulator, Demodulator},
 };
 
 
@@ -76,7 +77,7 @@ impl AcousticSender {
 
         // println!("{:?}: {:#?}", output_device.name(), &output_config);
 
-        let modulator = Modulator::new(carrier, len);
+        let modulator = Modulator::new(carrier.deep_clone(), len);
 
         let channel = config.channels() as usize;
 
@@ -84,7 +85,7 @@ impl AcousticSender {
             std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
         };
 
-        let carrier_clone = carrier.clone();
+        let carrier_clone = carrier.deep_clone();
 
         let idle_signal = move |len| {
             ChannelState::Idle(carrier_clone.iter(0).take(len).map(channel_handler).flatten())
@@ -150,10 +151,7 @@ impl AcousticReceiver {
 
         // println!("{:?}: {:#?}", input_device.name(), &input_config);
 
-        let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone(), len)
-            .collect::<Vec<_>>();
-
-        let mut demodulator = Demodulator::new(preamble, carrier, len);
+        let mut demodulator = Demodulator::new(carrier.deep_clone(), len);
 
         // let channel_count = config.channels() as usize;
 
