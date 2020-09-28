@@ -138,31 +138,34 @@ impl Demodulator {
                 } else {
                     *count += 1;
 
+                    let flag = last_prod < *last;
+
                     if last_prod > prod && *count >= WAVE_LENGTH {
                         // print!("{} {} {} ", item, threshold, prod);
 
                         let count_copy = *count;
 
-                        self.state = if last_prod < *last {
-                            if BARKER.iter().enumerate()
-                                .all(|(index, bit)| {
-                                    let shift = Self::WINDOW_EXTRA_SIZE - count_copy;
+                        let match_count = BARKER.iter()
+                            .enumerate().map(|(index, bit)| {
+                                let shift = Self::WINDOW_EXTRA_SIZE - count_copy;
 
-                                    let prod = Self::dot_product(
-                                        self.window.iter()
-                                            .skip(shift + index * SECTION_LEN).cloned(),
-                                        self.carrier.iter(0).take(SECTION_LEN),
-                                    );
+                                let prod = Self::dot_product(
+                                    self.window.iter().skip(shift + index * SECTION_LEN).cloned(),
+                                    self.carrier.iter(0).take(SECTION_LEN),
+                                );
 
-                                    *bit == (prod < 0)
-                                }) {
-                                // println!("match");
+                                if *bit == (prod < 0) { 1 } else { 0 }
+                            }).sum::<usize>();
+
+                        self.state = if flag {
+                            if BARKER.len() <= match_count + 1 {
+                                // println!("match {} {}", self.moving_average, last_prod);
 
                                 self.last_prod = 0;
 
                                 DemodulateState::RECEIVE(count_copy, BitReceive::new())
                             } else {
-                                // println!("preamble decode failed");
+                                // println!("preamble decode failed {}", match_count);
 
                                 DemodulateState::WAITE
                             }

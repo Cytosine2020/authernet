@@ -1,7 +1,4 @@
-use std::{
-    cmp::min,
-    sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError},
-};
+use std::sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError};
 use cpal::{
     Device, Sample, SupportedStreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
