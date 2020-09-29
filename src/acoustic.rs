@@ -5,8 +5,9 @@ use cpal::{
 };
 use crate::{
     SAMPLE_RATE, WAVE_LENGTH,
+    wave::Wave,
     bit_set::DataPack,
-    module::{Wave, Modulator, Demodulator},
+    module::{Modulator, Demodulator},
 };
 
 
@@ -74,9 +75,9 @@ impl AcousticSender {
     pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
-        // println!("{:?}: {:#?}", output_device.name(), &output_config);
+        // println!("{:?}: {:#?}", device.name(), &config);
 
-        let modulator = Modulator::new(carrier, len);
+        let modulator = Modulator::new(carrier.deep_clone(), len);
 
         let channel = config.channels() as usize;
 
@@ -84,7 +85,7 @@ impl AcousticSender {
             std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
         };
 
-        let carrier_clone = carrier.clone();
+        let carrier_clone = carrier.deep_clone();
 
         let idle_signal = move |len| {
             ChannelState::Idle(carrier_clone.iter(0).take(len).map(channel_handler).flatten())
@@ -148,20 +149,25 @@ impl AcousticReceiver {
     pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
-        // println!("{:?}: {:#?}", input_device.name(), &input_config);
+        // println!("{:?}: {:#?}", device.name(), &config);
 
-        let mut demodulator = Demodulator::new(carrier, len);
+        let mut demodulator = Demodulator::new(carrier.deep_clone(), len);
 
-        // let channel_count = config.channels() as usize;
+        let channel_count = config.channels() as usize;
 
         let (sender, receiver) = mpsc::channel();
+
+        let mut channel = 0;
 
         let stream = device.build_input_stream(
             &config.into(),
             move |data: &[f32], _| {
                 for sample in data.iter() {
                     if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
-                        sender.send(buffer).unwrap();
+                        if channel == 0 { sender.send(buffer).unwrap(); }
+
+                        channel += 1;
+                        if channel == channel_count { channel = 0; }
                     }
                 }
             },

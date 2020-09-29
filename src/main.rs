@@ -1,3 +1,4 @@
+pub mod wave;
 pub mod bit_set;
 pub mod acoustic;
 pub mod module;
@@ -6,10 +7,12 @@ use std::{
     env, fs::File, cmp::min, mem::size_of,
     io::{Read, Write, BufWriter, BufReader},
 };
-use acoustic::{AcousticSender, AcousticReceiver};
-use module::Wave;
-use crate::bit_set::DataPack;
 use core::convert::TryInto;
+use crate::{
+    wave::Wave,
+    bit_set::DataPack,
+    acoustic::{AcousticSender, AcousticReceiver},
+};
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);

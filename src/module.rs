@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
 use crate::{
     DATA_PACK_SIZE, SECTION_LEN, WAVE_LENGTH,
+    wave::Wave,
     bit_set::{DataPack, BitReceive, BitIter},
 };
 
+
+const PRE_PREAMBLE: [bool; 5] = [false, true, false, true, false];
 
 // const BARKER: [bool; 13] = [
 //     true, true, true, true, true, false, false,
@@ -17,31 +20,6 @@ const BARKER: [bool; 11] = [
 
 // const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
-
-#[derive(Clone)]
-pub struct Wave {
-    wave: Vec<i16>,
-}
-
-impl Wave {
-    pub fn calculate(rate: usize, amp: usize, t: usize) -> i16 {
-        ((t as f32 * 2. * std::f32::consts::PI / rate as f32).sin() * amp as f32) as i16
-    }
-
-    pub fn new(rate: usize, amp: usize) -> Self {
-        let wave = (0..rate).into_iter()
-            .map(|i| Self::calculate(rate, amp, i))
-            .collect::<Vec<_>>();
-
-        Self { wave }
-    }
-
-    pub fn get_rate(&self) -> usize { self.wave.len() }
-
-    pub fn iter(&self, t: usize) -> impl Iterator<Item=i16> {
-        self.wave.clone().into_iter().cycle().skip(t % self.get_rate())
-    }
-}
 
 pub fn bpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Item=i16>
     where I: Iterator<Item=bool>,
@@ -91,13 +69,13 @@ pub struct Modulator {
 }
 
 impl Modulator {
-    pub fn new(carrier: &Wave, len: usize) -> Self { Self { carrier: carrier.clone(), len } }
+    pub fn new(carrier: Wave, len: usize) -> Self { Self { carrier, len } }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
+        let preamble = PRE_PREAMBLE.iter().chain(BARKER.iter()).cloned();
+
         std::iter::empty()
-            .chain(bpsk_modulate([false, true, false, true, false].iter()
-                                     .chain(BARKER.iter()).cloned(),
-                                 self.carrier.clone(), self.len))
+            .chain(bpsk_modulate(preamble, self.carrier.clone(), self.len))
             .chain(qpsk_modulate(BitIter::new(buffer), self.carrier.clone(), self.len))
     }
 }
@@ -118,6 +96,8 @@ pub struct Demodulator {
 }
 
 impl Demodulator {
+    const WINDOW_EXTRA_SIZE: usize = SECTION_LEN * PRE_PREAMBLE.len();
+
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
     const MOVING_AVERAGE: i64 = 512;
     const ACTIVE_THRESHOLD: i64 = 512;
@@ -128,44 +108,59 @@ impl Demodulator {
         iter_a.zip(iter_b).map(|(a, b)| a as i64 * b as i64).sum::<i64>()
     }
 
-    fn moving_average(last: i64, new: i64, constant: i64) -> i64 {
-        (last * (constant - 1) + new) / constant
+    fn preamble_product(&self) -> i64 {
+        Self::dot_product(
+            self.window.iter().skip(Self::WINDOW_EXTRA_SIZE).cloned(),
+            self.preamble.iter().cloned(),
+        )
     }
 
-    pub fn new(carrier: &Wave, len: usize) -> Self {
-        let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone(), len)
-            .collect::<Vec<_>>();
+    fn section_product(&self, phase: usize, offset: usize) -> i64 {
+        Self::dot_product(
+            self.window.iter().skip(offset + WAVE_LENGTH).cloned(),
+            self.carrier.iter(phase * self.carrier.get_rate() / 4).take(SECTION_LEN - WAVE_LENGTH),
+        )
+    }
+
+    fn moving_average(last: i64, new: i64) -> i64 {
+        (last * (Self::MOVING_AVERAGE - 1) + new) / Self::MOVING_AVERAGE
+    }
+
+    pub fn new(carrier: Wave, len: usize) -> Self {
+        let rate = carrier.get_rate();
+        let carrier_clone = carrier.clone();
+
+        let preamble = BARKER.iter().cloned().map(move |bit| {
+            std::iter::repeat(0i16).take(WAVE_LENGTH).chain(
+                carrier_clone.iter(bit as usize * rate / 2).take(len - WAVE_LENGTH))
+        }).flatten().collect::<Vec<_>>();
 
         Self {
-            window: VecDeque::with_capacity(preamble.len() * len),
+            window: VecDeque::with_capacity(BARKER.len() + Self::WINDOW_EXTRA_SIZE),
             state: DemodulateState::WAITE,
-            carrier: carrier.clone(),
+            carrier,
             preamble,
             last_prod: 0,
-            moving_average: 1024,
+            moving_average: 0,
         }
     }
 
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
-        if self.window.len() == self.preamble.len() {
+        if self.window.len() == self.preamble.len() + Self::WINDOW_EXTRA_SIZE {
             self.window.pop_front();
         }
 
         self.window.push_back(item);
 
-        self.moving_average = Self::moving_average(
-            self.moving_average, (item as i64).abs(), Self::MOVING_AVERAGE,
-        );
+        self.moving_average = Self::moving_average(self.moving_average, (item as i64).abs());
 
         let threshold = self.moving_average * Self::HEADER_THRESHOLD_SCALE;
 
         match self.state {
             DemodulateState::WAITE => {
-                if self.window.len() == self.preamble.len() &&
+                if self.window.len() >= self.preamble.len() &&
                     self.moving_average > Self::ACTIVE_THRESHOLD {
-                    let prod = Self::dot_product(
-                        self.window.iter().cloned(), self.preamble.iter().cloned(),
-                    );
+                    let prod = self.preamble_product();
 
                     if prod > threshold && self.last_prod > prod {
                         // print!("{} {} {} ", item, threshold, prod);
@@ -178,78 +173,55 @@ impl Demodulator {
                     self.last_prod = 0;
                 }
             }
-            DemodulateState::MATCH(ref mut count, ref mut last) => {
-                let prod = Self::dot_product(
-                    self.window.iter().cloned(), self.preamble.iter().cloned(),
-                );
+            DemodulateState::MATCH(count, last) => {
+                let prod = self.preamble_product();
 
                 let last_prod = self.last_prod;
 
                 self.last_prod = prod;
 
-                if *count >= WAVE_LENGTH * 2 {
-                    self.state = DemodulateState::WAITE;
+                self.state = if count >= WAVE_LENGTH * 2 {
+                    DemodulateState::WAITE
                 } else {
-                    *count += 1;
-
-                    if last_prod > prod && *count >= WAVE_LENGTH {
+                    if last_prod > prod && count + 1 >= WAVE_LENGTH {
                         // print!("{} {} {} ", item, threshold, prod);
 
-                        let count_copy = *count;
+                        if last_prod < last {
+                            if BARKER.len() - 1 <= BARKER.iter()
+                                .enumerate().map(|(index, bit)| {
+                                let shift = Self::WINDOW_EXTRA_SIZE - count - 1;
 
-                        self.state = if last_prod < *last {
-                            if BARKER.iter().enumerate().skip(1)
-                                .all(|(index, bit)| {
-                                    let prod = Self::dot_product(
-                                        self.window.iter()
-                                            .skip(index * SECTION_LEN - count_copy).cloned(),
-                                        self.carrier.iter(0).take(SECTION_LEN),
-                                    );
+                                let prod = self.section_product(0, shift + index * SECTION_LEN);
 
-                                    *bit == (prod < 0)
-                                }) {
-                                // println!("match");
+                                if *bit == (prod < 0) { 1 } else { 0 }
+                            }).sum::<usize>() {
+                                // println!("match {} {}", self.moving_average, last_prod);
 
                                 self.last_prod = 0;
 
-                                DemodulateState::RECEIVE(count_copy, BitReceive::new())
+                                DemodulateState::RECEIVE(count + 1, BitReceive::new())
                             } else {
-                                // println!("preamble decode failed");
+                                // println!("preamble decode failed {}", match_count);
 
                                 DemodulateState::WAITE
                             }
                         } else {
                             DemodulateState::MATCH(1, self.last_prod)
-                        };
+                        }
+                    } else {
+                        DemodulateState::MATCH(count + 1, last)
                     }
                 }
             }
-            DemodulateState::RECEIVE(
-                ref mut wave_count, ref mut data_buffer,
-            ) => {
-                *wave_count += 1;
+            DemodulateState::RECEIVE(count, mut buffer) => {
+                self.state = if count + 1 == SECTION_LEN {
+                    let (result, _) = (0..4).map(|i| {
+                        (i, self.section_product(i, self.window.len() - SECTION_LEN))
+                    }).max_by_key(|(_, prod)| *prod).unwrap();
 
-                if *wave_count == SECTION_LEN {
-                    let wave = self.carrier.clone();
-
-                    let mut result = [(0usize, 0i64); 4];
-
-                    for i in 0..4 {
-                        let prod = Self::dot_product(
-                            self.window.iter().skip(self.window.len() - *wave_count).cloned(),
-                            wave.iter(i * wave.get_rate() / 4),
-                        );
-
-                        result[i] = (i, prod);
-                    };
-
-                    *wave_count = 0;
-
-                    let (i, _) = result.iter().max_by_key(|(_, prod)| *prod).unwrap();
-
-                    if data_buffer.push(*i / 2 == 1) == DATA_PACK_SIZE ||
-                        data_buffer.push(*i & 1 == 1) == DATA_PACK_SIZE {
-                        let result = data_buffer.into_array();
+                    if buffer.push(result / 2 == 1) == DATA_PACK_SIZE ||
+                        buffer.push(result & 1 == 1) == DATA_PACK_SIZE {
+                        let result = buffer.into_array();
 
                         self.state = DemodulateState::WAITE;
 
@@ -257,6 +229,10 @@ impl Demodulator {
 
                         return Some(result);
                     }
+
+                    DemodulateState::RECEIVE(0, buffer)
+                } else {
+                    DemodulateState::RECEIVE(count + 1, buffer)
                 }
             }
         }
