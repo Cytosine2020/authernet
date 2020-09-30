@@ -49,19 +49,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let receiver = AcousticReceiver::new(&wave, SECTION_LEN)?;
 
-    let sender = AcousticSender::new(&wave, SECTION_LEN)?;
+    // let sender = AcousticSender::new(&wave, SECTION_LEN)?;
+
+    // for i in 0..=255 {
+    //     compare(&receiver, &sender, i)?;
+    // }
 
     for i in 0..=255 {
-        compare(&receiver, &sender, i)?;
+        let buf = receiver.recv()?;
+
+        if buf != [i; DATA_PACK_SIZE / 8] {
+            println!("{} {:?}", i, buf);
+        } else {
+            println!("{}", i);
+        }
     }
 
     // for i in 0..=255 {
-    //     let buf = receiver.recv()?;
-    //
-    //     if buf != [i; DATA_PACK_SIZE / 8] {
-    //         println!("{} {:?}", i, buf);
-    //     }
+    //     sender.send([i; DATA_PACK_SIZE / 8])?;
     // }
+
+    // std::thread::sleep(std::time::Duration::from_secs(45));
 
     // if args[1] == "-s" {
     //     let sender = AcousticSender::new(&wave, SECTION_LEN)?;

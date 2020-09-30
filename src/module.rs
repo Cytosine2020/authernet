@@ -146,10 +146,10 @@ impl Demodulator {
 
                 self.last_prod = prod;
 
-                if count >= WAVE_LENGTH * 2 {
-                    self.state = DemodulateState::WAITE;
+                self.state = if count >= WAVE_LENGTH * 2 {
+                    DemodulateState::WAITE
                 } else {
-                    self.state = if last_prod > prod && count + 1 >= WAVE_LENGTH {
+                    if last_prod > prod && count + 1 >= WAVE_LENGTH {
                         // print!("{} {} {} ", item, threshold, prod);
 
                         if last_prod < last {

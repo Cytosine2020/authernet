@@ -34,7 +34,7 @@ pub fn print_hosts() {
     }
 }
 
-enum ChannelState<I, U> {
+pub enum ChannelState<I, U> {
     Message(I),
     Idle(U),
 }
@@ -75,7 +75,7 @@ impl AcousticSender {
     pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
-        // println!("{:?}: {:#?}", device.name(), &config);
+        // println!("output {:?}: {:#?}", device.name(), &config);
 
         let modulator = Modulator::new(carrier.deep_clone(), len);
 
@@ -97,7 +97,7 @@ impl AcousticSender {
 
         let (sender, receiver) = mpsc::channel();
 
-        let mut buffer = idle_signal(8192);
+        let mut buffer = idle_signal(32768);
 
         let stream = device.build_output_stream(
             &config.into(),
@@ -149,7 +149,7 @@ impl AcousticReceiver {
     pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
-        // println!("{:?}: {:#?}", device.name(), &config);
+        // println!("input {:?}: {:#?}", device.name(), &config);
 
         let mut demodulator = Demodulator::new(carrier.deep_clone(), len);
 
