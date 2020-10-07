@@ -64,9 +64,9 @@ pub struct Demodulator {
 impl Demodulator {
     const WINDOW_EXTRA_SIZE: usize = SECTION_LEN * PRE_PREAMBLE.len();
 
-    const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
+    const HEADER_THRESHOLD_SCALE: i64 = (1 << 20) * 3;
     const MOVING_AVERAGE: i64 = 512;
-    const ACTIVE_THRESHOLD: i64 = 512;
+    const ACTIVE_THRESHOLD: i64 = 256;
 
     fn dot_product<I, U>(iter_a: I, iter_b: U) -> i64
         where I: Iterator<Item=i16>, U: Iterator<Item=i16>,
@@ -97,9 +97,16 @@ impl Demodulator {
         let carrier_clone = carrier.clone();
 
         let preamble = BARKER.iter().cloned().map(move |bit| {
-            std::iter::repeat(0i16).take(WAVE_LENGTH).chain(
-                carrier_clone.iter(bit as usize * rate / 2).take(len - WAVE_LENGTH))
-        }).flatten().collect::<Vec<_>>();
+            carrier_clone.iter(bit as usize * rate / 2).take(WAVE_LENGTH).enumerate()
+                .map(|(index, value)| {
+                    (index * value as usize / WAVE_LENGTH) as i16
+                }).chain(carrier_clone.iter(bit as usize * rate / 2).take(len - WAVE_LENGTH))
+        }).flatten().collect();
+
+        // let preamble = BARKER.iter().cloned().map(move |bit| {
+        //     std::iter::repeat(0i16).take(WAVE_LENGTH).chain(
+        //         carrier_clone.iter(bit as usize * rate / 2).take(len - WAVE_LENGTH))
+        // }).flatten().collect();
 
         Self {
             window: VecDeque::with_capacity(BARKER.len() + Self::WINDOW_EXTRA_SIZE),
@@ -139,7 +146,7 @@ impl Demodulator {
                     self.last_prod = 0;
                 }
             }
-            DemodulateState::MATCH(count, last) => {
+            DemodulateState::MATCH(mut count, last) => {
                 let prod = self.preamble_product();
 
                 let last_prod = self.last_prod;
@@ -149,13 +156,15 @@ impl Demodulator {
                 self.state = if count >= WAVE_LENGTH * 2 {
                     DemodulateState::WAITE
                 } else {
-                    if last_prod > prod && count + 1 >= WAVE_LENGTH {
+                    count += 1;
+
+                    if last_prod > prod && count >= WAVE_LENGTH {
                         // print!("{} {} {} ", item, threshold, prod);
 
                         if last_prod < last {
                             if BARKER.len() - 1 <= BARKER.iter()
                                 .enumerate().map(|(index, bit)| {
-                                let shift = Self::WINDOW_EXTRA_SIZE - count - 1;
+                                let shift = Self::WINDOW_EXTRA_SIZE - count;
 
                                 let prod = self.section_product(shift + index * SECTION_LEN);
 
@@ -165,7 +174,7 @@ impl Demodulator {
 
                                 self.last_prod = 0;
 
-                                DemodulateState::RECEIVE(count + 1, BitReceive::new())
+                                DemodulateState::RECEIVE(count, BitReceive::new())
                             } else {
                                 // println!("preamble decode failed {}", match_count);
 
@@ -175,12 +184,14 @@ impl Demodulator {
                             DemodulateState::MATCH(1, self.last_prod)
                         }
                     } else {
-                        DemodulateState::MATCH(count + 1, last)
+                        DemodulateState::MATCH(count, last)
                     }
                 }
             }
-            DemodulateState::RECEIVE(count, mut buffer) => {
-                self.state = if count + 1 == SECTION_LEN {
+            DemodulateState::RECEIVE(mut count, mut buffer) => {
+                count += 1;
+
+                self.state = if count == SECTION_LEN {
                     let prod = self.section_product(self.window.len() - SECTION_LEN);
 
                     if buffer.push(prod < 0) == DATA_PACK_SIZE {
@@ -195,7 +206,7 @@ impl Demodulator {
 
                     DemodulateState::RECEIVE(0, buffer)
                 } else {
-                    DemodulateState::RECEIVE(count + 1, buffer)
+                    DemodulateState::RECEIVE(count, buffer)
                 }
             }
         }
