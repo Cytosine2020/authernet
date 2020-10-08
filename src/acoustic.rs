@@ -4,10 +4,9 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crate::{
-    SAMPLE_RATE, WAVE_LENGTH,
-    wave::Wave,
-    bit_set::DataPack,
-    module::{Modulator, Demodulator},
+    SAMPLE_RATE, CHANNEL,
+    wave::{Wave, Synthesizer},
+    bit_set::DataPack, module::{Modulator, Demodulator}
 };
 
 
@@ -58,7 +57,7 @@ pub struct AcousticSender {
 }
 
 impl AcousticSender {
-    const IDLE_SECTION: usize = WAVE_LENGTH * 8;
+    const IDLE_SECTION: usize = 128;
 
     fn get_device() -> Result<(Device, SupportedStreamConfig), Box<dyn std::error::Error>> {
         let device = cpal::default_host()
@@ -72,12 +71,12 @@ impl AcousticSender {
         Ok((device, config))
     }
 
-    pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(carrier: &Wave) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
         // println!("output {:?}: {:#?}", device.name(), &config);
 
-        let modulator = Modulator::new(carrier.deep_clone(), len);
+        let modulator = Modulator::new(carrier.deep_clone());
 
         let channel = config.channels() as usize;
 
@@ -88,7 +87,11 @@ impl AcousticSender {
         let carrier_clone = carrier.deep_clone();
 
         let idle_signal = move |len| {
-            ChannelState::Idle(carrier_clone.iter(0).take(len).map(channel_handler).flatten())
+            let synthesizer = Synthesizer::new(
+                (0..CHANNEL).map(|i| carrier_clone.iter(i, 0))
+            );
+
+            ChannelState::Idle(synthesizer.take(len).map(channel_handler).flatten())
         };
 
         let message_signal = move |buffer| {
@@ -146,12 +149,12 @@ impl AcousticReceiver {
         Ok((device, config))
     }
 
-    pub fn new(carrier: &Wave, len: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(carrier: &Wave) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
         // println!("input {:?}: {:#?}", device.name(), &config);
 
-        let mut demodulator = Demodulator::new(carrier.deep_clone(), len);
+        let mut demodulator = Demodulator::new(carrier.deep_clone());
 
         let channel_count = config.channels() as usize;
 

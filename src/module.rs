@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use crate::{
-    DATA_PACK_SIZE, SECTION_LEN, WAVE_LENGTH,
-    wave::Wave,
+    DATA_PACK_SIZE, SECTION_LEN, BASE_F, CHANNEL, CYCLIC_PREFIX,
+    wave::{Wave, Synthesizer},
     bit_set::{DataPack, BitReceive, BitIter},
 };
 
@@ -21,28 +21,46 @@ const BARKER: [bool; 11] = [
 // const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
-pub fn bpsk_modulate<I>(iter: I, carrier: Wave, len: usize) -> impl Iterator<Item=i16>
+pub fn bpsk_modulate<I>(iter: I, carrier: Wave) -> impl Iterator<Item=i16>
     where I: Iterator<Item=bool>,
 {
     iter.map(move |bit| {
-        carrier.iter(bit as usize * carrier.get_rate() / 2).take(len)
+        carrier.iter(0, SECTION_LEN - CYCLIC_PREFIX)
+            .map(move |item| if bit { item } else { -item })
+            .take(SECTION_LEN + CYCLIC_PREFIX)
+    }).flatten()
+}
+
+pub fn ofdm_modulate<I>(mut iter: I, carrier: Wave) -> impl Iterator<Item=i16>
+    where I: Iterator<Item=bool>,
+{
+    let size = iter.size_hint().1.unwrap() / CHANNEL;
+
+    (0..size).map(move |_| {
+        let channels = (0..CHANNEL)
+            .map(|i| {
+                let bit = iter.next().unwrap();
+                carrier.iter(i, SECTION_LEN - CYCLIC_PREFIX)
+                    .map(move |item| if bit { item } else { -item })
+            });
+
+        Synthesizer::new(channels).take(SECTION_LEN + CYCLIC_PREFIX)
     }).flatten()
 }
 
 pub struct Modulator {
     carrier: Wave,
-    len: usize,
 }
 
 impl Modulator {
-    pub fn new(carrier: Wave, len: usize) -> Self { Self { carrier, len } }
+    pub fn new(carrier: Wave) -> Self { Self { carrier } }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
         let preamble = PRE_PREAMBLE.iter().chain(BARKER.iter()).cloned();
 
         std::iter::empty()
-            .chain(bpsk_modulate(preamble, self.carrier.clone(), self.len))
-            .chain(bpsk_modulate(BitIter::new(buffer), self.carrier.clone(), self.len))
+            .chain(bpsk_modulate(preamble, self.carrier.clone()))
+            .chain(ofdm_modulate(BitIter::new(buffer), self.carrier.clone()))
     }
 }
 
@@ -62,9 +80,12 @@ pub struct Demodulator {
 }
 
 impl Demodulator {
-    const WINDOW_EXTRA_SIZE: usize = SECTION_LEN * PRE_PREAMBLE.len();
+    const PREAMBLE_CHANNEL: usize = 0;
+    const PREAMBLE_WAVE_LEN: usize = SECTION_LEN / (BASE_F + Self::PREAMBLE_CHANNEL);
 
-    const HEADER_THRESHOLD_SCALE: i64 = (1 << 20) * 3;
+    const WINDOW_EXTRA_SIZE: usize = (SECTION_LEN + CYCLIC_PREFIX) * PRE_PREAMBLE.len();
+
+    const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
     const MOVING_AVERAGE: i64 = 512;
     const ACTIVE_THRESHOLD: i64 = 256;
 
@@ -76,15 +97,15 @@ impl Demodulator {
 
     fn preamble_product(&self) -> i64 {
         Self::dot_product(
-            self.window.iter().skip(Self::WINDOW_EXTRA_SIZE).cloned(),
+            self.window.iter().skip(self.window.len() - self.preamble.len()).cloned(),
             self.preamble.iter().cloned(),
         )
     }
 
-    fn section_product(&self, offset: usize) -> i64 {
+    fn section_product(&self, offset: usize, channel: usize) -> i64 {
         Self::dot_product(
-            self.window.iter().skip(offset + WAVE_LENGTH).cloned(),
-            self.carrier.iter(0).take(SECTION_LEN - WAVE_LENGTH),
+            self.window.iter().skip(offset + CYCLIC_PREFIX).cloned(),
+            self.carrier.iter(channel, 0).take(SECTION_LEN),
         )
     }
 
@@ -92,24 +113,12 @@ impl Demodulator {
         (last * (Self::MOVING_AVERAGE - 1) + new) / Self::MOVING_AVERAGE
     }
 
-    pub fn new(carrier: Wave, len: usize) -> Self {
-        let rate = carrier.get_rate();
-        let carrier_clone = carrier.clone();
-
-        let preamble = BARKER.iter().cloned().map(move |bit| {
-            carrier_clone.iter(bit as usize * rate / 2).take(WAVE_LENGTH).enumerate()
-                .map(|(index, value)| {
-                    (index * value as usize / WAVE_LENGTH) as i16
-                }).chain(carrier_clone.iter(bit as usize * rate / 2).take(len - WAVE_LENGTH))
-        }).flatten().collect();
-
-        // let preamble = BARKER.iter().cloned().map(move |bit| {
-        //     std::iter::repeat(0i16).take(WAVE_LENGTH).chain(
-        //         carrier_clone.iter(bit as usize * rate / 2).take(len - WAVE_LENGTH))
-        // }).flatten().collect();
+    pub fn new(carrier: Wave) -> Self {
+        let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone())
+            .collect::<Vec<_>>();
 
         Self {
-            window: VecDeque::with_capacity(BARKER.len() + Self::WINDOW_EXTRA_SIZE),
+            window: VecDeque::with_capacity(preamble.len() + Self::WINDOW_EXTRA_SIZE),
             state: DemodulateState::WAITE,
             carrier,
             preamble,
@@ -153,22 +162,25 @@ impl Demodulator {
 
                 self.last_prod = prod;
 
-                self.state = if count >= WAVE_LENGTH * 2 {
+                self.state = if count >= Self::PREAMBLE_WAVE_LEN * 2 {
                     DemodulateState::WAITE
                 } else {
                     count += 1;
 
-                    if last_prod > prod && count >= WAVE_LENGTH {
+                    if last_prod > prod && count >= Self::PREAMBLE_WAVE_LEN {
                         // print!("{} {} {} ", item, threshold, prod);
 
                         if last_prod < last {
                             if BARKER.len() - 1 <= BARKER.iter()
                                 .enumerate().map(|(index, bit)| {
-                                let shift = Self::WINDOW_EXTRA_SIZE - count;
+                                let shift = self.window.len() - self.preamble.len() - count;
 
-                                let prod = self.section_product(shift + index * SECTION_LEN);
+                                let prod = self.section_product(
+                                    shift + index * (SECTION_LEN + CYCLIC_PREFIX),
+                                    Self::PREAMBLE_CHANNEL,
+                                );
 
-                                if *bit == (prod < 0) { 1 } else { 0 }
+                                if *bit == (prod > 0) { 1 } else { 0 }
                             }).sum::<usize>() {
                                 // println!("match {} {}", self.moving_average, last_prod);
 
@@ -176,7 +188,7 @@ impl Demodulator {
 
                                 DemodulateState::RECEIVE(count, BitReceive::new())
                             } else {
-                                // println!("preamble decode failed {}", match_count);
+                                // println!("preamble decode failed");
 
                                 DemodulateState::WAITE
                             }
@@ -191,17 +203,19 @@ impl Demodulator {
             DemodulateState::RECEIVE(mut count, mut buffer) => {
                 count += 1;
 
-                self.state = if count == SECTION_LEN {
-                    let prod = self.section_product(self.window.len() - SECTION_LEN);
+                self.state = if count == SECTION_LEN + CYCLIC_PREFIX {
+                    for i in 0..CHANNEL {
+                        let prod = self.section_product(self.window.len() - count, i);
 
-                    if buffer.push(prod < 0) == DATA_PACK_SIZE {
-                        let result = buffer.into_array();
+                        if buffer.push(prod > 0) == DATA_PACK_SIZE {
+                            let result = buffer.into_array();
 
-                        self.state = DemodulateState::WAITE;
+                            self.state = DemodulateState::WAITE;
 
-                        self.window.drain(..self.window.len() - SECTION_LEN);
+                            self.window.drain(..self.window.len() - SECTION_LEN);
 
-                        return Some(result);
+                            return Some(result);
+                        }
                     }
 
                     DemodulateState::RECEIVE(0, buffer)

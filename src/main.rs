@@ -16,9 +16,11 @@ use crate::{
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const WAVE_LENGTH: usize = 16;
-const SECTION_LEN: usize = 48;
-const DATA_PACK_SIZE: usize = 128;
+const SECTION_LEN: usize = 192;
+const CYCLIC_PREFIX: usize = 0;
+const BASE_F: usize = 12;
+const CHANNEL: usize = 32;
+const DATA_PACK_SIZE: usize = 1024;
 
 
 pub fn compare(receiver: &AcousticReceiver, sender: &AcousticSender, i: u8)
@@ -30,27 +32,27 @@ pub fn compare(receiver: &AcousticReceiver, sender: &AcousticSender, i: u8)
 
     let recv = receiver.recv()?;
 
-        if recv != send {
-            println!("{} {:?}", i, recv);
-        } else {
-            println!("{}", i);
+    if !recv.iter().zip(send.iter()).all(|(a, b)| *a == *b) {
+        print!("{:02X} ", i);
+        for byte in recv.iter() {
+            print!("{:02X}", byte);
         }
+        println!();
+    } else {
+        println!("{:02X}", i);
+    }
 
     Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let args = env::args().collect::<Vec<_>>();
-    //
-    // if args.len() != 3 { panic!("accept only two arguments!") }
-
     // acoustic::print_hosts();
 
-    let wave = Wave::new(WAVE_LENGTH, std::i16::MAX as usize);
+    let wave = Wave::new(SECTION_LEN, std::i16::MAX as usize, BASE_F, CHANNEL);
 
-    let receiver = AcousticReceiver::new(&wave, SECTION_LEN)?;
+    let receiver = AcousticReceiver::new(&wave)?;
 
-    let sender = AcousticSender::new(&wave, SECTION_LEN)?;
+    let sender = AcousticSender::new(&wave)?;
 
     for i in 0..=255 {
         compare(&receiver, &sender, i)?;
@@ -72,8 +74,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // std::thread::sleep(std::time::Duration::from_secs(45));
 
+    // let args = env::args().collect::<Vec<_>>();
+    //
+    // if args.len() != 3 { panic!("accept only two arguments!") }
+    //
     // if args[1] == "-s" {
-    //     let sender = AcousticSender::new(&wave, SECTION_LEN)?;
+    //     let sender = AcousticSender::new(&wave)?;
     //
     //     let file = File::open(args[2].clone())?;
     //
@@ -111,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     //     std::thread::sleep(std::time::Duration::from_secs(90));
     // } else if args[1] == "-r" {
-    //     let receiver = AcousticReceiver::new(&wave, SECTION_LEN)?;
+    //     let receiver = AcousticReceiver::new(&wave)?;
     //
     //     let file = File::create(args[2].clone())?;
     //
