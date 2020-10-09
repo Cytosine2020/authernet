@@ -7,7 +7,6 @@ use std::{
     env, fs::File, cmp::min, mem::size_of,
     io::{Read, Write, BufWriter, BufReader},
 };
-use core::convert::TryInto;
 use crate::{
     wave::Wave,
     bit_set::DataPack,
@@ -30,11 +29,15 @@ pub fn compare(receiver: &AcousticReceiver, sender: &AcousticSender, i: u8)
 
     let recv = receiver.recv()?;
 
-        if recv != send {
-            println!("{} {:?}", i, recv);
-        } else {
-            println!("{}", i);
+    if !recv.iter().zip(send.iter()).all(|(a, b)| *a == *b) {
+        print!("{:02X} ", i);
+        for byte in recv.iter() {
+            print!("{:02X}", byte);
         }
+        println!();
+    } else {
+        println!("{:02X}", i);
+    }
 
     Ok(())
 }
@@ -48,9 +51,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let wave = Wave::new(WAVE_LENGTH, std::i16::MAX as usize);
 
-    let receiver = AcousticReceiver::new(&wave, SECTION_LEN)?;
+    let receiver = AcousticReceiver::new(&wave)?;
 
-    let sender = AcousticSender::new(&wave, SECTION_LEN)?;
+    let sender = AcousticSender::new(&wave)?;
 
     for i in 0..=255 {
         compare(&receiver, &sender, i)?;

@@ -11,10 +11,10 @@ impl<T> ArcSlice<T> {
 }
 
 impl<T: Clone> ArcSlice<T> {
-    fn iter(&self, shift: usize) -> impl Iterator<Item=T> {
+    fn iter(&self) -> impl Iterator<Item=T> {
         let clone = self.inner.clone();
 
-        (0..self.inner.len()).cycle().skip(shift).map(move |i| clone[i].clone())
+        (0..self.inner.len()).cycle().map(move |i| clone[i].clone())
     }
 
     pub fn deep_clone(&self) -> Self {
@@ -56,9 +56,7 @@ impl Wave {
         }
     }
 
-    pub fn get_rate(&self) -> usize { self.rate }
-
-    pub fn iter(&self, t: usize) -> impl Iterator<Item=i16> {
-        self.wave.clone().iter(t % self.rate as usize)
+    pub fn iter(&self) -> impl Iterator<Item=i16> {
+        self.wave.clone().iter()
     }
 }
