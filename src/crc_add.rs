@@ -1,7 +1,7 @@
 use crate::{DATA_PACK_SIZE, FILE_SIZE, bit_set::DataPack};
 use std::{
     fs::File, cmp::min,
-    io::{Read, Write, Error},
+    io::{Read, Write},
 };
 use lazy_static;
 

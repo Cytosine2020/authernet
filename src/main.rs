@@ -26,59 +26,42 @@ const DATA_PACK_SIZE: usize = 256;
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let input_file = File::open("input.txt")?;
-    let output_file = File::create("output.txt")?;
+    let wave = Wave::new(SECTION_LEN, std::i16::MAX as usize, BASE_F, CHANNEL);
 
-    assert_eq!(input_file.metadata()?.len(), FILE_SIZE as u64);
+    let args = env::args().collect::<Vec<_>>();
 
-    let read_in = FileRead::new(input_file);
+    if args.len() != 3 { panic!("accept only two arguments!") }
 
-    let mut write_data = FileWrite::new(output_file);
+    if args[1] == "-s" {
+        let sender = AcousticSender::new(&wave)?;
 
-    for data in read_in {
-        write_data.write_in(data);
+        let file = File::open(args[2].clone())?;
 
-        if write_data.count == 0 { break; }
+        assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
+
+        let read_in = FileRead::new(file);
+
+        for i in read_in {
+            sender.send(i)?;
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(90));
+    } else if args[1] == "-r" {
+        let receiver = AcousticReceiver::new(&wave)?;
+
+        let file = File::create(args[2].clone())?;
+
+        let mut write_data = FileWrite::new(file);
+
+        while write_data.count != 0 {
+            let buf = receiver.recv()?;
+            write_data.write_in(buf);
+        }
+
+        write_data.write_allin();
+    } else {
+        panic!("unknown command: {}", args[1]);
     }
-
-    write_data.write_allin();
-
-    // let wave = Wave::new(SECTION_LEN, std::i16::MAX as usize, BASE_F, CHANNEL);
-    //
-    // let args = env::args().collect::<Vec<_>>();
-    //
-    // if args.len() != 3 { panic!("accept only two arguments!") }
-    //
-    // if args[1] == "-s" {
-    //     let sender = AcousticSender::new(&wave)?;
-    //
-    //     let file = File::open(args[2].clone())?;
-    //
-    //     assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
-    //
-    //     let read_in = FileRead::new(file);
-    //
-    //     for i in read_in {
-    //         sender.send(i)?;
-    //     }
-    //
-    //     std::thread::sleep(std::time::Duration::from_secs(90));
-    // } else if args[1] == "-r" {
-    //     let receiver = AcousticReceiver::new(&wave)?;
-    //
-    //     let file = File::create(args[2].clone())?;
-    //
-    //     let mut write_data = FileWrite::new(file);
-    //
-    //     while write_data.count != 0 {
-    //         let buf = receiver.recv()?;
-    //         write_data.write_in(buf);
-    //     }
-    //
-    //     write_data.write_allin();
-    // } else {
-    //     panic!("unknown command: {}", args[1]);
-    // }
 
     Ok(())
 }
