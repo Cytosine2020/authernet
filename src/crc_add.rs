@@ -138,6 +138,9 @@ impl FileWrite {
             }
 
             if num < PACKAGE_NUM {
+                if self.num[num] {
+                    return;
+                }
                 self.num[num] = true;
                 self.point = num * (DATA_PACK_SIZE - 8 - INDEX);
                 let upper = min(DATA_PACK_SIZE - 8 - INDEX, FILE_SIZE - self.point);

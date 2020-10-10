@@ -18,10 +18,10 @@ use crate::{
 const FILE_SIZE: usize = 10000;
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const SECTION_LEN: usize = 96;
+const SECTION_LEN: usize = 48;
 const CYCLIC_PREFIX: usize = 0;
-const BASE_F: usize = 8;
-const CHANNEL: usize = 4;
+const BASE_F: usize = 3;
+const CHANNEL: usize = 2;
 const DATA_PACK_SIZE: usize = 256;
 
 
