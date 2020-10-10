@@ -1,203 +1,168 @@
-use crate::DATA_PACK_SIZE;
-use crate::bit_set::DataPack;
+use crate::{DATA_PACK_SIZE, FILE_SIZE, bit_set::DataPack};
 use std::{
-    env, fs::File, cmp::min, mem::size_of,
-    io::{Read, Write, BufWriter, BufReader, Error},
+    fs::File, cmp::min,
+    io::{Read, Write, Error},
 };
-const CRC_8_Gen:u32=0x131;
-pub struct File_read{
-    CRC_8_table:[u8;256],
-    buf_read:BufReader<File>,
-    size:u64,
-    num:u8,
-    count:u8,
-}
-impl File_read{
-    pub fn new(file:File) -> Result<Self,Box<dyn std::error::Error>>{
-        let size=file.metadata()?.len() as u64;
-        let buf_read=BufReader::new(file);
-        let CRC_8_table:[u8;256]=create_crc_table();
-        Ok(Self{
-            CRC_8_table:CRC_8_table,
-            buf_read:buf_read,
-            size:size,
-            num:((10000+DATA_PACK_SIZE-1)/DATA_PACK_SIZE) as u8,
-            count:0,
-        })
-    }
-    fn crc_generate(&self,data:DataPack) -> DataPack {
-        let mut crc:u8=0;
-        let mut ret:DataPack=[0;DATA_PACK_SIZE/8];
-        let CRC_8_table:&[u8;256]=&self.CRC_8_table;
-        for i in 0..(DATA_PACK_SIZE-8)/8  {
-            crc=crc ^ data[i];
-            crc=CRC_8_table[crc as usize];
+use lazy_static;
+
+
+const INDEX: usize = 8;
+const PACKAGE_NUM: usize = (FILE_SIZE + (DATA_PACK_SIZE - 16) - 1) / (DATA_PACK_SIZE - 16);
+
+lazy_static!(
+    static ref CRC_TABLE: [u8; 256] = {
+        let mut table = [0; 256];
+        let mut crc;
+        for i in 0..0xFF {
+            crc = i;
+            for _ in 0..=8 {
+                if i & 0x80 > 0 {
+                    crc = (crc << 1) ^ 0x31;
+                } else {
+                    crc <<= 1;
+                }
+            }
+            table[i as usize] = crc;
         }
-        ret[..(DATA_PACK_SIZE-16)/8].copy_from_slice(&data[..(DATA_PACK_SIZE-16)/8]);
-        ret[(DATA_PACK_SIZE-8)/8]=crc;
+        table
+    };
+);
+
+pub struct FileRead {
+    file: File,
+    size: usize,
+    count: u8,
+}
+
+impl FileRead {
+    pub fn new(file: File) -> Self {
+        Self {
+            file,
+            size: FILE_SIZE,
+            count: 0,
+        }
+    }
+
+    fn crc_generate(data: DataPack) -> DataPack {
+        const DATA_SIZE: usize = (DATA_PACK_SIZE - 8) / 8;
+
+        let mut crc = 0;
+        let mut ret = [0; DATA_PACK_SIZE / 8];
+
+        for i in 0..DATA_SIZE {
+            crc = crc ^ data[i];
+            crc = CRC_TABLE[crc as usize];
+        }
+
+        ret[..DATA_SIZE].copy_from_slice(&data[..DATA_SIZE]);
+        ret[DATA_SIZE] = crc;
+
         ret
     }
-    fn create_crc_table(self) -> [u8;256]{
-        let mut j:[u8;256]=[0;256];
-        let mut crc:u8=0;
-        for i in 0..0xFF{
-            crc=i;
-            for q in 0..=8{
-                if i&0x80 > 0{
-                    crc = (crc << 1) ^ 0x31;
-                }else{
-                    crc = (crc << 1);
-                }
-            }
-            j[i as usize]=crc;
-        }
-        j
-    }
 }
-fn create_crc_table() -> [u8;256]{
-    let mut j:[u8;256]=[0;256];
-    let mut crc:u8=0;
-    for i in 0..0xFF{
-        crc=i;
-        for q in 0..=8{
-            if i&0x80 > 0{
-                crc = (crc << 1) ^ 0x31;
-            }else{
-                crc = (crc << 1);
-            }
-        }
-        j[i as usize]=crc;
-    }
-    j
-}
-impl Iterator for File_read{
+
+impl Iterator for FileRead {
     type Item = DataPack;
 
+    fn next(&mut self) -> Option<DataPack> {
+        if self.size <= 0 { return None; }
 
-    fn next(&mut self) -> Option<DataPack>{
-        if self.size <= 0{
-            return None;
-        }
-        let index:usize=f32::log2((self.num*2-1) as f32) as usize;
-        let mut buf:[u8;DATA_PACK_SIZE-8]=[0;DATA_PACK_SIZE-8];
-        let mut ret:DataPack=[0;DATA_PACK_SIZE/8];
-        
-        
-        if self.size > (buf.len()-index) as u64{
-            self.buf_read.read_exact(&mut buf[index..]);
-            for i in 0..index{
-                buf[i]=(self.count>>i&0x1)+30;
+        let mut buf = [0; DATA_PACK_SIZE - 8];
+        let mut ret = [0; DATA_PACK_SIZE / 8];
+
+        if self.size > (buf.len() - INDEX) {
+            self.file.read_exact(&mut buf[INDEX..]).unwrap();
+
+            for i in 0..INDEX {
+                buf[i] = (self.count >> i & 0x1) + '0' as u8;
             }
-            self.count+=1;
-            self.size -= (buf.len()-index) as u64;
-        }else{
-            for i in 0..index{
-                buf[i]=(self.count>>i&0x1)+30;
+
+            self.count += 1;
+            self.size -= buf.len() - INDEX;
+        } else {
+            for i in 0..INDEX {
+                buf[i] = (self.count >> i & 0x1) + '0' as u8;
             }
-            self.count+=1;
-            self.buf_read.read_exact(&mut buf[index..self.size as usize]);
-            self.size =0;
+
+            self.count += 1;
+            self.file.read_exact(&mut buf[INDEX..INDEX + self.size as usize]).unwrap();
+            self.size = 0;
         }
-        
-    
-        for i in 0..(ret.len()-1){
-            for j in 0..8{
-                let p=i*8+j;
-                ret[i]+=(0x1&buf[p])<<j;
+
+        for i in 0..(ret.len() - 1) {
+            for j in 0..8 {
+                let p = i * 8 + j;
+                ret[i] += (0x1 & buf[p]) << j;
             }
         }
-        ret=self.crc_generate(ret);
+
+        ret = Self::crc_generate(ret);
+
         Some(ret)
+    }
+}
 
-    }
+pub struct FileWrite {
+    file: File,
+    num: [bool; PACKAGE_NUM],
+    data: [u8; FILE_SIZE],
+    point: usize,
+    pub count: u8,
 }
-pub struct File_write{
-    file:File,
-    num:[bool;(10000+DATA_PACK_SIZE-1)/DATA_PACK_SIZE],
-    CRC_table:[u8;256],
-    data:[u8;10000],
-    point:usize,
-    pub count:u8
-}
-impl File_write{
-    pub fn new() -> Result<Self, Error>{
-        let mut form_data:[u8;10000]=[0;10000];
-        let mut num:[bool;(10000+DATA_PACK_SIZE-1)/DATA_PACK_SIZE]=[false;(10000+DATA_PACK_SIZE-1)/DATA_PACK_SIZE];
-        let file=File::create("output.txt")?;
-        let Crc=create_crc_table();
-        Ok(Self{
-            file:file,
-            num:num,
-            CRC_table:Crc,
-            data:form_data,
-            point:0,
-            count:((10000+DATA_PACK_SIZE-1)/DATA_PACK_SIZE) as u8
-        })
+
+impl FileWrite {
+    pub fn new(file: File) -> Self {
+        Self {
+            file,
+            num: [false; PACKAGE_NUM],
+            data: [0; FILE_SIZE],
+            point: 0,
+            count: PACKAGE_NUM as u8,
+        }
     }
-    pub fn write_in(&mut self,data:DataPack) -> Result<(), Error>{
-        let index:usize=f32::log2(((10000+DATA_PACK_SIZE-1)/DATA_PACK_SIZE*2-1) as f32) as usize;
-        let mut buf:[u8;DATA_PACK_SIZE-8]=[0;DATA_PACK_SIZE-8];
-        if self.crc_compare(&data){
-            for i in 0..data.len()-1{
-                for j in 0..8{
-                    buf[i*8+j]=30+0x1&(data[i]>>j);
+
+    pub fn write_in(&mut self, data: DataPack) {
+        let mut buf = [0; DATA_PACK_SIZE - 8];
+
+        if self.crc_compare(&data) {
+            for i in 0..data.len() - 1 {
+                for j in 0..8 {
+                    buf[i * 8 + j] = '0' as u8 + (0x1 & (data[i] >> j));
                 }
             }
-            let mut num:usize=0;
-            for i in 0..index{
-                num+=((buf[i]&0x1)<<i) as usize;
+
+            let mut num = 0;
+
+            for i in 0..INDEX {
+                num += ((buf[i] & 0x1) << i) as usize;
             }
-            self.num[num]=true;
-            self.point=(num)*(DATA_PACK_SIZE-8-index);
-            let upper=min(self.point+(DATA_PACK_SIZE-8-index),10000);
-            for i in index..upper{
-                self.data[i+self.point]=buf[i];
+
+            self.num[num] = true;
+            self.point = num * (DATA_PACK_SIZE - 8 - INDEX);
+            let upper = min(DATA_PACK_SIZE - 8 - INDEX, FILE_SIZE - self.point);
+
+            for i in 0..upper {
+                self.data[self.point + i] = buf[i + INDEX];
             }
-            self.count-=1;
-            
+
+            self.count -= 1;
+        } else {
+            println!("crc fail!");
         }
-        
-        Ok(())
     }
-    pub fn write_allin(&mut self) -> Result<(),bool>{
-        for i in self.num.iter(){
-            if i==&false{
-                return Err(false)
-            }
-        }
-        self.file.write_all(&self.data);
-        Ok(())
+
+    pub fn write_allin(&mut self) {
+        self.file.write_all(&self.data).unwrap();
     }
-    fn create_crc_table(&self) -> [u8;256]{
-        let mut j:[u8;256]=[0;256];
-        let mut crc:u8=0;
-        for i in 0..0xFF{
-            crc=i;
-            for q in 0..=8{
-                if i&0x80 > 0{
-                    crc = (crc << 1) ^ 0x31;
-                }else{
-                    crc = (crc << 1);
-                }
-            }
-            j[i as usize]=crc;
+
+    fn crc_compare(&self, data: &DataPack) -> bool {
+        let mut crc = 0;
+
+        for i in 0..DATA_PACK_SIZE / 8 {
+            crc = crc ^ data[i];
+            crc = CRC_TABLE[crc as usize];
         }
-        j
-    }
-    fn crc_compare(&self,data:&DataPack) -> bool{
-        let mut crc:u8=0;
-        let CRC_8_table:[u8;256]=self.create_crc_table();
-        for i in 0..DATA_PACK_SIZE/8  {
-            crc=crc ^ data[i];
-            crc=CRC_8_table[crc as usize];
-        }
-        if crc > 0{
-            false
-        }else{
-            true
-        }
+
+        crc == 0
     }
 }
-
-
-
