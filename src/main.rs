@@ -2,6 +2,7 @@ pub mod wave;
 pub mod bit_set;
 pub mod acoustic;
 pub mod module;
+pub mod crc_add;
 
 use std::{
     env, fs::File, cmp::min, mem::size_of,
@@ -12,15 +13,16 @@ use crate::{
     wave::Wave,
     bit_set::DataPack,
     acoustic::{AcousticSender, AcousticReceiver},
+    crc_add::{File_read,File_write},
 };
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const SECTION_LEN: usize = 192;
+const SECTION_LEN: usize = 96;
 const CYCLIC_PREFIX: usize = 0;
-const BASE_F: usize = 12;
-const CHANNEL: usize = 32;
-const DATA_PACK_SIZE: usize = 1024;
+const BASE_F: usize = 8;
+const CHANNEL: usize = 8;
+const DATA_PACK_SIZE: usize = 256;
 
 
 pub fn compare(receiver: &AcousticReceiver, sender: &AcousticSender, i: u8)
@@ -50,13 +52,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let wave = Wave::new(SECTION_LEN, std::i16::MAX as usize, BASE_F, CHANNEL);
 
-    let receiver = AcousticReceiver::new(&wave)?;
+    // let receiver = AcousticReceiver::new(&wave)?;
 
     let sender = AcousticSender::new(&wave)?;
 
-    for i in 0..=255 {
-        compare(&receiver, &sender, i)?;
-    }
+    // for i in 0..=255 {
+    //     compare(&receiver, &sender, i)?;
+    // }
 
     // for i in 0..=255 {
     //     let buf = receiver.recv()?;
@@ -68,17 +70,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     }
     // }
 
-    // for i in 0..=255 {
-    //     sender.send([i; DATA_PACK_SIZE / 8])?;
-    // }
+    for i in 0..=255 {
+        sender.send([i; DATA_PACK_SIZE / 8])?;
+    }
+    
+    std::thread::sleep(std::time::Duration::from_secs(45));
+    
+    
+    let args = env::args().collect::<Vec<_>>();
     //
-    // std::thread::sleep(std::time::Duration::from_secs(45));
-
-    // let args = env::args().collect::<Vec<_>>();
+    if args.len() != 3 { panic!("accept only two arguments!") }
     //
-    // if args.len() != 3 { panic!("accept only two arguments!") }
-    //
-    // if args[1] == "-s" {
+    if args[1] == "-s" {
+        let file:File=File::open("input.txt")?;
+        let mut readin:File_read=File_read::new(file)?;
+        for i in readin {
+            sender.send(i);
+        }
     //     let sender = AcousticSender::new(&wave)?;
     //
     //     let file = File::open(args[2].clone())?;
@@ -115,8 +123,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //         sender.send(buf)?;
     //     }
     //
-    //     std::thread::sleep(std::time::Duration::from_secs(90));
-    // } else if args[1] == "-r" {
+        std::thread::sleep(std::time::Duration::from_secs(90));
+    } else if args[1] == "-r" {
+        let receiver = AcousticReceiver::new(&wave)?;
+        let mut write_data:File_write=File_write::new()?;
+        while(write_data.count!=0){
+            let mut buf = receiver.recv()?;
+            write_data.write_in(buf);
+        }
+        write_data.write_allin();
     //     let receiver = AcousticReceiver::new(&wave)?;
     //
     //     let file = File::create(args[2].clone())?;
@@ -156,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     }
     // } else {
     //     panic!("unknown command: {}", args[1]);
-    // }
+    }
 
     Ok(())
 }
