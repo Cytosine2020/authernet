@@ -12,11 +12,12 @@ const PACKAGE_NUM: usize = (FILE_SIZE + (DATA_PACK_SIZE - 16) - 1) / (DATA_PACK_
 lazy_static!(
     static ref CRC_TABLE: [u8; 256] = {
         let mut table = [0; 256];
-        let mut crc;
-        for i in 0..0xFF {
-            crc = i;
+
+        for i in 0..0xFFu8 {
+            let mut crc= i;
+
             for _ in 0..=8 {
-                if i & 0x80 > 0 {
+                if (crc & 0x80) > 0 {
                     crc = (crc << 1) ^ 0x31;
                 } else {
                     crc <<= 1;
@@ -24,6 +25,7 @@ lazy_static!(
             }
             table[i as usize] = crc;
         }
+
         table
     };
 );
@@ -137,10 +139,7 @@ impl FileWrite {
                 num += ((buf[i] & 0x1) << i) as usize;
             }
 
-            if num < PACKAGE_NUM {
-                if self.num[num] {
-                    return;
-                }
+            if num < PACKAGE_NUM && !self.num[num] {
                 self.num[num] = true;
                 self.point = num * (DATA_PACK_SIZE - 8 - INDEX);
                 let upper = min(DATA_PACK_SIZE - 8 - INDEX, FILE_SIZE - self.point);
@@ -152,12 +151,10 @@ impl FileWrite {
                 self.count -= 1;
 
                 println!("receive {}", num);
-
-                return;
             }
+        } else {
+            println!("crc fail!");
         }
-
-        println!("crc fail!");
     }
 
     pub fn write_allin(&mut self) {
@@ -167,8 +164,8 @@ impl FileWrite {
     fn crc_compare(&self, data: &DataPack) -> bool {
         let mut crc = 0;
 
-        for i in 0..DATA_PACK_SIZE / 8 {
-            crc = crc ^ data[i];
+        for byte in data.iter() {
+            crc = crc ^ *byte;
             crc = CRC_TABLE[crc as usize];
         }
 
