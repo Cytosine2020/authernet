@@ -21,7 +21,7 @@ const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const SECTION_LEN: usize = 96;
 const CYCLIC_PREFIX: usize = 0;
 const BASE_F: usize = 8;
-const CHANNEL: usize = 8;
+const CHANNEL: usize = 4;
 const DATA_PACK_SIZE: usize = 256;
 
 
@@ -36,12 +36,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sender = AcousticSender::new(&wave)?;
 
         let file = File::open(args[2].clone())?;
+        let file2 = File::open(args[2].clone())?;
 
         assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
 
-        let read_in = FileRead::new(file);
+        let read_in1 = FileRead::new(file);
+        let read_in2 = FileRead::new(file2);
 
-        for i in read_in {
+        for i in read_in1 {
+            sender.send(i)?;
+        }
+        for i in read_in2 {
             sender.send(i)?;
         }
 

@@ -137,18 +137,24 @@ impl FileWrite {
                 num += ((buf[i] & 0x1) << i) as usize;
             }
 
-            self.num[num] = true;
-            self.point = num * (DATA_PACK_SIZE - 8 - INDEX);
-            let upper = min(DATA_PACK_SIZE - 8 - INDEX, FILE_SIZE - self.point);
+            if num < PACKAGE_NUM {
+                self.num[num] = true;
+                self.point = num * (DATA_PACK_SIZE - 8 - INDEX);
+                let upper = min(DATA_PACK_SIZE - 8 - INDEX, FILE_SIZE - self.point);
 
-            for i in 0..upper {
-                self.data[self.point + i] = buf[i + INDEX];
+                for i in 0..upper {
+                    self.data[self.point + i] = buf[i + INDEX];
+                }
+
+                self.count -= 1;
+
+                println!("receive {}", num);
+
+                return;
             }
-
-            self.count -= 1;
-        } else {
-            println!("crc fail!");
         }
+
+        println!("crc fail!");
     }
 
     pub fn write_allin(&mut self) {
