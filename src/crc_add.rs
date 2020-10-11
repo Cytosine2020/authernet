@@ -14,7 +14,7 @@ lazy_static!(
         let mut table = [0; 256];
 
         for i in 0..0xFFu8 {
-            let mut crc= i;
+            let mut crc = i;
 
             for _ in 0..=8 {
                 if (crc & 0x80) > 0 {
