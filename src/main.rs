@@ -9,13 +9,13 @@ extern crate lazy_static;
 
 use std::{env, fs::File, io::{Read, Write}};
 use crate::{
-    acoustic::{AcousticSender, AcousticReceiver},
+    acoustic::Athernet,
     mac::{CRC_SIZE, BODY_INDEX, BODY_MAX_SIZE, SIZE_INDEX, crc_generate, crc_unwrap},
     bit_iter::{BitToByteIter, ByteToBitIter},
 };
 
 
-const DATA_PACK_SIZE: usize = 32;
+const DATA_PACK_SIZE: usize = 64;
 
 pub type DataPack = [u8; DATA_PACK_SIZE];
 
@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() != 3 { panic!("accept only two arguments!") }
 
     if args[1] == "-s" {
-        let sender = AcousticSender::new()?;
+        let sender = Athernet::new()?;
 
         let send_file = || -> Result<_, Box<dyn std::error::Error>> {
             let file = File::open(args[2].clone())?;
@@ -97,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         std::thread::sleep(std::time::Duration::from_secs(15));
     } else if args[1] == "-r" {
-        let receiver = AcousticReceiver::new()?;
+        let receiver = Athernet::new()?;
 
         let mut flag = [false; PACK_NUM];
         let mut all_data = [0u8; BYTE_NUM];
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let point = num * PAYLOAD_SIZE;
 
                     all_data[point..point + data.len() - CRC_SIZE]
-                        .copy_from_slice(&data[BODY_INDEX..]);
+                        .copy_from_slice(&data[1..]);
 
                     count += 1;
 
@@ -122,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if count == PACK_NUM {
                         let data = ByteToBitIter::from(all_data.iter().cloned())
                             .take(FILE_SIZE).map(|bit| if bit { '1' } else { '0' } as u8)
-                            .collect::<Box<[u8]>>();
+                            .collect::<Box<_>>();
 
                         assert_eq!(data.len(), FILE_SIZE);
 

@@ -4,7 +4,9 @@ use lazy_static;
 
 pub const SIZE_INDEX: usize = 0;
 pub const SIZE_SIZE: usize = 1;
-pub const BODY_INDEX: usize = SIZE_INDEX + SIZE_SIZE;
+pub const MAC_INDEX: usize = SIZE_INDEX + SIZE_SIZE;
+pub const MAC_SIZE: usize = 2;
+pub const BODY_INDEX: usize = MAC_INDEX + MAC_SIZE;
 pub const BODY_MAX_SIZE: usize = DATA_PACK_SIZE - BODY_INDEX - CRC_SIZE;
 pub const CRC_SIZE: usize = 1;
 

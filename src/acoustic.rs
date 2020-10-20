@@ -1,13 +1,9 @@
 use std::sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError};
 use cpal::{
-    Host, Device, Sample, SupportedStreamConfig,
+    Host, Sample,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use crate::{
-    DataPack,
-    wave::{CHANNEL, CARRIER, Synthesizer},
-    module::{Modulator, Demodulator},
-};
+use crate::{ DataPack, wave::CARRIER, module::{Modulator, Demodulator} };
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
@@ -65,27 +61,25 @@ impl<I, U> Iterator for ChannelState<I, U>
     }
 }
 
-pub struct AcousticSender {
+pub struct Athernet {
     sender: Sender<DataPack>,
-    _stream: cpal::Stream,
+    receiver: Receiver<DataPack>,
+    _input_stream: cpal::Stream,
+    _output_stream: cpal::Stream,
 }
 
-impl AcousticSender {
+impl Athernet {
     const IDLE_SECTION: usize = 128;
 
-    fn get_device() -> Result<(Device, SupportedStreamConfig), Box<dyn std::error::Error>> {
+    fn create_send_stream()
+        -> Result<(Sender<DataPack>, cpal::Stream), Box<dyn std::error::Error>>
+    {
         let device = get_host().default_output_device().ok_or("no input device available")?;
 
         let config = device.supported_output_configs()?
             .map(|item| item.with_max_sample_rate())
             .filter(|item| item.sample_rate() == SAMPLE_RATE)
             .next().ok_or("expected configuration not found")?;
-
-        Ok((device, config))
-    }
-
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let (device, config) = Self::get_device()?;
 
         let modulator = Modulator::new(CARRIER.deep_clone());
 
@@ -95,14 +89,8 @@ impl AcousticSender {
             std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
         };
 
-        let carrier_clone = CARRIER.deep_clone();
-
         let idle_signal = move |len| {
-            let synthesizer = Synthesizer::new(
-                (0..CHANNEL).map(|i| carrier_clone.iter(i, 0))
-            );
-
-            ChannelState::Idle(synthesizer.take(len).map(channel_handler).flatten())
+            ChannelState::Idle(std::iter::repeat(0i16).take(len))
         };
 
         let message_signal = move |buffer| {
@@ -136,33 +124,18 @@ impl AcousticSender {
 
         stream.play()?;
 
-        Ok(Self { sender, _stream: stream })
+        Ok((sender, stream))
     }
 
-    pub fn send(&self, data: &DataPack) -> Result<(), SendError<DataPack>> {
-        self.sender.send(*data)
-    }
-}
-
-pub struct AcousticReceiver {
-    receiver: Receiver<DataPack>,
-    _stream: cpal::Stream,
-}
-
-impl AcousticReceiver {
-    fn get_device() -> Result<(Device, SupportedStreamConfig), Box<dyn std::error::Error>> {
+    fn create_receive_stream()
+        -> Result<(Receiver<DataPack>, cpal::Stream), Box<dyn std::error::Error>>
+    {
         let device = get_host().default_input_device().ok_or("no input device available")?;
 
         let config = device.supported_input_configs()?
             .map(|item| item.with_max_sample_rate())
             .filter(|item| item.sample_rate() == SAMPLE_RATE)
             .next().ok_or("expected configuration not found")?;
-
-        Ok((device, config))
-    }
-
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let (device, config) = Self::get_device()?;
 
         let mut demodulator = Demodulator::new(CARRIER.deep_clone());
 
@@ -190,7 +163,18 @@ impl AcousticReceiver {
 
         stream.play()?;
 
-        Ok(Self { receiver, _stream: stream })
+        Ok((receiver, stream))
+    }
+
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let (sender, _input_stream) = Self::create_send_stream()?;
+        let (receiver, _output_stream) = Self::create_receive_stream()?;
+
+        Ok(Self { sender, receiver, _input_stream, _output_stream })
+    }
+
+    pub fn send(&self, data: &DataPack) -> Result<(), SendError<DataPack>> {
+        self.sender.send(*data)
     }
 
     pub fn recv(&self) -> Result<DataPack, RecvError> { self.receiver.recv() }
