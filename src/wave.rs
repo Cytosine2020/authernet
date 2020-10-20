@@ -1,10 +1,11 @@
-use std::ops::Deref;
+use lazy_static;
 
 pub const SECTION_LEN: usize = 48;
-pub const CYCLIC_PREFIX: usize = 0;
 pub const BASE_F: usize = 3;
 pub const CHANNEL: usize = 2;
 
+
+lazy_static!(pub static ref CARRIER: Wave = Wave::new(););
 
 #[derive(Clone)]
 struct ArcSlice<T> {
@@ -25,12 +26,6 @@ impl<T: Clone> ArcSlice<T> {
     pub fn deep_clone(&self) -> Self {
         Self { inner: (*self.inner).into() }
     }
-}
-
-impl<T> Deref for ArcSlice<T> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target { &*self.inner }
 }
 
 #[derive(Clone)]

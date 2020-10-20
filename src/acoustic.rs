@@ -5,7 +5,7 @@ use cpal::{
 };
 use crate::{
     DataPack,
-    wave::{CHANNEL, Wave, Synthesizer},
+    wave::{CHANNEL, CARRIER, Synthesizer},
     module::{Modulator, Demodulator},
 };
 
@@ -19,9 +19,7 @@ fn get_host() -> Host {
 }
 
 #[cfg(target_os = "macos")]
-fn get_host() -> Host {
-    cpal::default_host()
-}
+fn get_host() -> Host { cpal::default_host() }
 
 pub fn print_config() {
     let host = get_host();
@@ -86,10 +84,10 @@ impl AcousticSender {
         Ok((device, config))
     }
 
-    pub fn new(carrier: &Wave) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
-        let modulator = Modulator::new(carrier.deep_clone());
+        let modulator = Modulator::new(CARRIER.deep_clone());
 
         let channel = config.channels() as usize;
 
@@ -97,7 +95,7 @@ impl AcousticSender {
             std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
         };
 
-        let carrier_clone = carrier.deep_clone();
+        let carrier_clone = CARRIER.deep_clone();
 
         let idle_signal = move |len| {
             let synthesizer = Synthesizer::new(
@@ -141,7 +139,9 @@ impl AcousticSender {
         Ok(Self { sender, _stream: stream })
     }
 
-    pub fn send(&self, data: &DataPack) -> Result<(), SendError<DataPack>> { self.sender.send(*data) }
+    pub fn send(&self, data: &DataPack) -> Result<(), SendError<DataPack>> {
+        self.sender.send(*data)
+    }
 }
 
 pub struct AcousticReceiver {
@@ -161,10 +161,10 @@ impl AcousticReceiver {
         Ok((device, config))
     }
 
-    pub fn new(carrier: &Wave) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
 
-        let mut demodulator = Demodulator::new(carrier.deep_clone());
+        let mut demodulator = Demodulator::new(CARRIER.deep_clone());
 
         let channel_count = config.channels() as usize;
 

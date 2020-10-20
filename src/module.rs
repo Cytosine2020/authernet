@@ -1,10 +1,13 @@
 use std::collections::VecDeque;
 use crate::{
     DATA_PACK_SIZE, DataPack,
-    wave::{SECTION_LEN, BASE_F, CHANNEL, CYCLIC_PREFIX, Wave, Synthesizer},
+    wave::{SECTION_LEN, BASE_F, CHANNEL, Wave, Synthesizer},
     bit_iter::ByteToBitIter,
 };
+use crate::mac::SIZE_INDEX;
 
+
+const CYCLIC_PREFIX: usize = 0;
 
 const PRE_PREAMBLE: [bool; 5] = [false, true, false, true, false];
 
@@ -52,7 +55,7 @@ impl Modulator {
         let preamble = PRE_PREAMBLE.iter().chain(BARKER.iter()).cloned();
 
         let iter = ByteToBitIter::from(
-            (0..buffer.len()).map(move |index| buffer[index])
+            (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
         );
 
         std::iter::empty()
@@ -78,14 +81,22 @@ impl BitReceive {
     pub fn new() -> Self { Self { inner: [0; DATA_PACK_SIZE], count: 0 } }
 
     #[inline]
-    pub fn push(&mut self, bit: bool) -> usize {
+    pub fn push(&mut self, bit: bool) -> Option<Result<DataPack, ()>> {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
-        self.count
-    }
 
-    #[inline]
-    pub fn into_array(self) -> DataPack { self.inner }
+        if self.count <= 8 {
+            None
+        } else {
+            if self.inner[0] as usize > DATA_PACK_SIZE {
+                Some(Err(()))
+            } else if self.count < self.inner[0] as usize * 8 {
+                None
+            } else {
+                Some(Ok(self.inner))
+            }
+        }
+    }
 }
 
 pub struct Demodulator {
@@ -225,14 +236,17 @@ impl Demodulator {
                     for i in 0..CHANNEL {
                         let prod = self.section_product(self.window.len() - count, i);
 
-                        if buffer.push(prod > 0) == DATA_PACK_SIZE * 8 {
-                            let result = buffer.into_array();
-
+                        if let Some(result) = buffer.push(prod > 0) {
                             self.state = DemodulateState::WAITE;
 
                             self.window.drain(..self.window.len() - SECTION_LEN);
 
-                            return Some(result);
+                            self.state = DemodulateState::WAITE;
+
+                            return match result {
+                                Ok(data) => Some(data),
+                                Err(_) => None,
+                            };
                         }
                     }
 
