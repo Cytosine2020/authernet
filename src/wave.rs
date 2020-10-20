@@ -1,5 +1,9 @@
 use std::ops::Deref;
-use crate::CHANNEL;
+
+pub const SECTION_LEN: usize = 48;
+pub const CYCLIC_PREFIX: usize = 0;
+pub const BASE_F: usize = 3;
+pub const CHANNEL: usize = 2;
 
 
 #[derive(Clone)]
@@ -32,30 +36,29 @@ impl<T> Deref for ArcSlice<T> {
 #[derive(Clone)]
 pub struct Wave {
     wave: ArcSlice<i16>,
-    section: usize,
 }
 
 impl Wave {
-    pub fn calculate(rate: f32, t: f32, amp: f32) -> f32 {
-        (t * 2. * std::f32::consts::PI / rate).sin() * amp
+    pub fn calculate(rate: f32, t: f32) -> f32 {
+        (t * 2. * std::f32::consts::PI / rate).sin() * std::i16::MAX as f32
     }
 
-    pub fn new(section: usize, amp: usize, base_f: usize, channel: usize) -> Self {
-        let wave = (base_f..(base_f + channel)).map(|f| {
-            (0..section as usize).map(move |i| {
-                Self::calculate(section as f32 / f as f32, i as f32, amp as f32) as i16
+    pub fn new() -> Self {
+        let wave = (BASE_F..BASE_F + CHANNEL).map(|f| {
+            (0..SECTION_LEN as usize).map(move |i| {
+                Self::calculate(SECTION_LEN as f32 / f as f32, i as f32) as i16
             })
         }).flatten().collect();
 
-        Self { wave: ArcSlice::new(wave), section }
+        Self { wave: ArcSlice::new(wave) }
     }
 
     pub fn deep_clone(&self) -> Self {
-        Self { wave: self.wave.deep_clone(), section: self.section }
+        Self { wave: self.wave.deep_clone() }
     }
 
     pub fn iter(&self, channel: usize, shift: usize) -> impl Iterator<Item=i16> {
-        self.wave.clone().iter(channel * self.section, (channel + 1) * self.section, shift)
+        self.wave.clone().iter(channel * SECTION_LEN, (channel + 1) * SECTION_LEN, shift)
     }
 }
 

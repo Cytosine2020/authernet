@@ -1,34 +1,50 @@
 use std::sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError};
 use cpal::{
-    Device, Sample, SupportedStreamConfig,
+    Host, Device, Sample, SupportedStreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crate::{
-    SAMPLE_RATE, CHANNEL,
-    wave::{Wave, Synthesizer},
-    bit_set::DataPack, module::{Modulator, Demodulator}
+    DataPack,
+    wave::{CHANNEL, Wave, Synthesizer},
+    module::{Modulator, Demodulator},
 };
 
 
-pub fn print_hosts() {
-    for host in cpal::available_hosts().into_iter()
-        .filter_map(|item| cpal::host_from_id(item).ok()) {
-        println!("Host: {:?}", host.id());
+const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 
-        for device in host.devices().into_iter().flatten() {
-            println!("Device name: {:?}", device.name());
 
-            for config in device
-                .supported_output_configs().expect("error while querying configs")
-                .map(|item| item.with_max_sample_rate()) {
-                println!("output: {:#?}", config);
-            }
+#[cfg(target_os = "windows")]
+fn get_host() -> Host {
+    cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
+}
 
-            for config in device
-                .supported_input_configs().expect("error while querying configs")
-                .map(|item| item.with_max_sample_rate()) {
-                println!("input: {:#?}", config);
-            }
+#[cfg(target_os = "macos")]
+fn get_host() -> Host {
+    cpal::default_host()
+}
+
+pub fn print_config() {
+    let host = get_host();
+
+    println!("Host: {:?}", host.id());
+
+    if let Some(output_device) = host.default_output_device() {
+        println!("Output device name: {:?}", output_device.name());
+
+        for config in output_device
+            .supported_output_configs().expect("error while querying configs")
+            .map(|item| item.with_max_sample_rate()) {
+            println!("{:#?}", config);
+        }
+    }
+
+    if let Some(input_device) = host.default_input_device() {
+        println!("Input device name: {:?}", input_device.name());
+
+        for config in input_device
+            .supported_input_configs().expect("error while querying configs")
+            .map(|item| item.with_max_sample_rate()) {
+            println!("{:#?}", config);
         }
     }
 }
@@ -60,8 +76,7 @@ impl AcousticSender {
     const IDLE_SECTION: usize = 128;
 
     fn get_device() -> Result<(Device, SupportedStreamConfig), Box<dyn std::error::Error>> {
-        let device = cpal::default_host()
-            .default_output_device().ok_or("no input device available")?;
+        let device = get_host().default_output_device().ok_or("no input device available")?;
 
         let config = device.supported_output_configs()?
             .map(|item| item.with_max_sample_rate())
@@ -73,8 +88,6 @@ impl AcousticSender {
 
     pub fn new(carrier: &Wave) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
-
-        // println!("output {:?}: {:#?}", device.name(), &config);
 
         let modulator = Modulator::new(carrier.deep_clone());
 
@@ -128,7 +141,7 @@ impl AcousticSender {
         Ok(Self { sender, _stream: stream })
     }
 
-    pub fn send(&self, data: DataPack) -> Result<(), SendError<DataPack>> { self.sender.send(data) }
+    pub fn send(&self, data: &DataPack) -> Result<(), SendError<DataPack>> { self.sender.send(*data) }
 }
 
 pub struct AcousticReceiver {
@@ -138,8 +151,7 @@ pub struct AcousticReceiver {
 
 impl AcousticReceiver {
     fn get_device() -> Result<(Device, SupportedStreamConfig), Box<dyn std::error::Error>> {
-        let device = cpal::default_host()
-            .default_input_device().ok_or("no input device available")?;
+        let device = get_host().default_input_device().ok_or("no input device available")?;
 
         let config = device.supported_input_configs()?
             .map(|item| item.with_max_sample_rate())
@@ -151,8 +163,6 @@ impl AcousticReceiver {
 
     pub fn new(carrier: &Wave) -> Result<Self, Box<dyn std::error::Error>> {
         let (device, config) = Self::get_device()?;
-
-        // println!("input {:?}: {:#?}", device.name(), &config);
 
         let mut demodulator = Demodulator::new(carrier.deep_clone());
 

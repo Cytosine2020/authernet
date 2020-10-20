@@ -1,8 +1,8 @@
 pub mod wave;
-pub mod bit_set;
+pub mod bit_iter;
 pub mod acoustic;
 pub mod module;
-pub mod crc_add;
+pub mod crc;
 
 #[macro_use]
 extern crate lazy_static;
@@ -11,59 +11,95 @@ use std::{env, fs::File};
 use crate::{
     wave::Wave,
     acoustic::{AcousticSender, AcousticReceiver},
-    crc_add::{FileRead, FileWrite},
+    crc::{PAYLOAD_SIZE, FileRead, crc_unwrap},
+    bit_iter::{BitToByteIter, ByteToBitIter},
 };
+use std::io::{Read, Write};
 
+
+const DATA_PACK_SIZE: usize = 32;
+
+pub type DataPack = [u8; DATA_PACK_SIZE];
 
 const FILE_SIZE: usize = 10000;
-
-const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const SECTION_LEN: usize = 48;
-const CYCLIC_PREFIX: usize = 0;
-const BASE_F: usize = 3;
-const CHANNEL: usize = 2;
-const DATA_PACK_SIZE: usize = 256;
+const PACK_NUM: usize = (FILE_SIZE + PAYLOAD_SIZE * 8 - 1) / (PAYLOAD_SIZE * 8);
+const BYTE_NUM: usize = (FILE_SIZE + 7) / 8;
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let wave = Wave::new(SECTION_LEN, std::i16::MAX as usize, BASE_F, CHANNEL);
+    let wave = Wave::new();
 
-    let args = env::args().collect::<Vec<_>>();
+    let args = env::args().collect::<Box<_>>();
 
     if args.len() != 3 { panic!("accept only two arguments!") }
 
     if args[1] == "-s" {
         let sender = AcousticSender::new(&wave)?;
 
-        let file = File::open(args[2].clone())?;
-        let file2 = File::open(args[2].clone())?;
+        let send_file = || -> Result<_, Box<dyn std::error::Error>> {
+            let file = File::open(args[2].clone())?;
 
-        assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
+            assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
 
-        let read_in1 = FileRead::new(file);
-        let read_in2 = FileRead::new(file2);
+            let iter = BitToByteIter::from(file.bytes().map(|byte| {
+                match byte.unwrap() as char {
+                    '0' => false,
+                    '1' => true,
+                    _ => panic!(),
+                }
+            }));
 
-        for i in read_in1 {
-            sender.send(i)?;
-        }
-        for i in read_in2 {
-            sender.send(i)?;
-        }
+            for data_pack in FileRead::new(iter) {
+                sender.send(&data_pack)?;
+            }
 
-        std::thread::sleep(std::time::Duration::from_secs(90));
+            Ok(())
+        };
+
+        send_file()?;
+
+        send_file()?;
+
+        std::thread::sleep(std::time::Duration::from_secs(15));
     } else if args[1] == "-r" {
         let receiver = AcousticReceiver::new(&wave)?;
 
-        let file = File::create(args[2].clone())?;
+        let mut flag = [false; PACK_NUM];
+        let mut all_data = [0u8; BYTE_NUM];
+        let mut count = 0;
 
-        let mut write_data = FileWrite::new(file);
+        loop {
+            if let Some(data) = crc_unwrap(&receiver.recv()?) {
+                let size = data[0] as usize;
+                let num = data[1] as usize;
 
-        while write_data.count != 0 {
-            let buf = receiver.recv()?;
-            write_data.write_in(buf);
+                if !flag[num] {
+                    flag[num] = true;
+
+                    let point = num * PAYLOAD_SIZE;
+
+                    all_data[point..point + size - 3].copy_from_slice(&data[2..size - 1]);
+
+                    count += 1;
+
+                    println!("receive {}", num);
+
+                    if count == PACK_NUM {
+                        let data = ByteToBitIter::from(all_data.iter().cloned())
+                            .take(FILE_SIZE)
+                            .map(|bit| bit as u8 + '0' as u8).
+                            collect::<Box<[u8]>>();
+
+                        assert_eq!(data.len(), FILE_SIZE);
+
+                        File::create(args[2].clone())?.write_all(&data).unwrap();
+                        break;
+                    }
+                }
+            } else {
+                println!("crc fail!");
+            }
         }
-
-        write_data.write_allin();
     } else {
         panic!("unknown command: {}", args[1]);
     }

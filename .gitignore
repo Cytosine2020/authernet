@@ -4,3 +4,5 @@
 target/
 
 .DS_store
+input.txt
+output.txt

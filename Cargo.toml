@@ -13,5 +13,6 @@ opt-level = 0
 opt-level = 3
 
 [dependencies]
-cpal = "0.12.1"
+cpal = { version = "0.12.1", features = ["asio"] }
+#cpal = "0.12.1"
 lazy_static = "1.4.0"

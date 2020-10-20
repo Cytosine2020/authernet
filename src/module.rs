@@ -1,24 +1,17 @@
 use std::collections::VecDeque;
 use crate::{
-    DATA_PACK_SIZE, SECTION_LEN, BASE_F, CHANNEL, CYCLIC_PREFIX,
-    wave::{Wave, Synthesizer},
-    bit_set::{DataPack, BitReceive, BitIter},
+    DATA_PACK_SIZE, DataPack,
+    wave::{SECTION_LEN, BASE_F, CHANNEL, CYCLIC_PREFIX, Wave, Synthesizer},
+    bit_iter::ByteToBitIter,
 };
 
 
 const PRE_PREAMBLE: [bool; 5] = [false, true, false, true, false];
 
-// const BARKER: [bool; 13] = [
-//     true, true, true, true, true, false, false,
-//     true, true, false, true, false, true
-// ];
-
 const BARKER: [bool; 11] = [
     true, true, true, false, false, false,
     true, false, false, true, false
 ];
-
-// const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
 pub fn bpsk_modulate<I>(iter: I, carrier: Wave) -> impl Iterator<Item=i16>
@@ -58,9 +51,13 @@ impl Modulator {
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
         let preamble = PRE_PREAMBLE.iter().chain(BARKER.iter()).cloned();
 
+        let iter = ByteToBitIter::from(
+            (0..buffer.len()).map(move |index| buffer[index])
+        );
+
         std::iter::empty()
             .chain(bpsk_modulate(preamble, self.carrier.clone()))
-            .chain(ofdm_modulate(BitIter::new(buffer), self.carrier.clone()))
+            .chain(ofdm_modulate(iter, self.carrier.clone()))
     }
 }
 
@@ -70,11 +67,32 @@ enum DemodulateState {
     RECEIVE(usize, BitReceive),
 }
 
+#[derive(Copy, Clone)]
+pub struct BitReceive {
+    inner: DataPack,
+    count: usize,
+}
+
+impl BitReceive {
+    #[inline]
+    pub fn new() -> Self { Self { inner: [0; DATA_PACK_SIZE], count: 0 } }
+
+    #[inline]
+    pub fn push(&mut self, bit: bool) -> usize {
+        self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
+        self.count += 1;
+        self.count
+    }
+
+    #[inline]
+    pub fn into_array(self) -> DataPack { self.inner }
+}
+
 pub struct Demodulator {
     window: VecDeque<i16>,
     state: DemodulateState,
     carrier: Wave,
-    preamble: Vec<i16>,
+    preamble: Box<[i16]>,
     last_prod: i64,
     moving_average: i64,
 }
@@ -115,7 +133,7 @@ impl Demodulator {
 
     pub fn new(carrier: Wave) -> Self {
         let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone())
-            .collect::<Vec<_>>();
+            .collect::<Box<_>>();
 
         Self {
             window: VecDeque::with_capacity(preamble.len() + Self::WINDOW_EXTRA_SIZE),
@@ -207,7 +225,7 @@ impl Demodulator {
                     for i in 0..CHANNEL {
                         let prod = self.section_product(self.window.len() - count, i);
 
-                        if buffer.push(prod > 0) == DATA_PACK_SIZE {
+                        if buffer.push(prod > 0) == DATA_PACK_SIZE * 8 {
                             let result = buffer.into_array();
 
                             self.state = DemodulateState::WAITE;
