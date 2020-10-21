@@ -1,4 +1,4 @@
-pub mod wave;
+pub mod carrier;
 pub mod bit_iter;
 pub mod acoustic;
 pub mod module;

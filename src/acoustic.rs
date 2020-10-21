@@ -68,10 +68,10 @@ pub struct Athernet {
 impl Athernet {
     const IDLE_SECTION: usize = 128;
 
-    fn create_send_stream()
+    fn create_send_stream(host: &Host)
         -> Result<(Sender<DataPack>, cpal::Stream), Box<dyn std::error::Error>>
     {
-        let device = get_host().default_output_device().ok_or("no input device available")?;
+        let device = host.default_output_device().ok_or("no input device available")?;
 
         let config = device.supported_output_configs()?
             .map(|item| item.with_max_sample_rate())
@@ -124,10 +124,10 @@ impl Athernet {
         Ok((sender, stream))
     }
 
-    fn create_receive_stream()
+    fn create_receive_stream(host: &Host)
         -> Result<(Receiver<DataPack>, cpal::Stream), Box<dyn std::error::Error>>
     {
-        let device = get_host().default_input_device().ok_or("no input device available")?;
+        let device = host.default_input_device().ok_or("no input device available")?;
 
         let config = device.supported_input_configs()?
             .map(|item| item.with_max_sample_rate())
@@ -164,8 +164,10 @@ impl Athernet {
     }
 
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let (sender, _input_stream) = Self::create_send_stream()?;
-        let (receiver, _output_stream) = Self::create_receive_stream()?;
+        let host = get_host();
+
+        let (sender, _input_stream) = Self::create_send_stream(&host)?;
+        let (receiver, _output_stream) = Self::create_receive_stream(&host)?;
 
         Ok(Self { sender, receiver, _input_stream, _output_stream })
     }

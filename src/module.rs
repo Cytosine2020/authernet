@@ -1,13 +1,11 @@
 use std::collections::VecDeque;
 use crate::{
     DATA_PACK_SIZE, DataPack,
-    wave::{SECTION_LEN, BASE_F, CHANNEL, Synthesizer, carrier},
+    carrier::{SECTION_LEN, BASE_F, CHANNEL, Synthesizer, carrier},
     bit_iter::ByteToBitIter,
     mac::{SIZE_INDEX, SIZE_SIZE},
 };
 
-
-const CYCLIC_PREFIX: usize = 0;
 
 const PRE_PREAMBLE: [bool; 5] = [false, true, false, true, false];
 
@@ -16,31 +14,35 @@ const BARKER: [bool; 11] = [
     true, false, false, true, false
 ];
 
+const PREAMBLE_CHANNEL: usize = 0;
+const PREAMBLE_WAVE_LEN: usize = SECTION_LEN / (BASE_F + PREAMBLE_CHANNEL);
 
-fn bpsk_modulate<I>(iter: I) -> impl Iterator<Item=i16>
+
+fn bpsk_modulate<I>(iter: I, channel: usize) -> impl Iterator<Item=i16>
     where I: Iterator<Item=bool>,
 {
     iter.map(move |bit| {
-        carrier(0, SECTION_LEN - CYCLIC_PREFIX)
-            .map(move |item| if bit { item } else { -item })
-            .take(SECTION_LEN + CYCLIC_PREFIX)
+        carrier(channel).map(move |item| if bit { item } else { -item })
     }).flatten()
 }
 
 fn ofdm_modulate<I>(mut iter: I) -> impl Iterator<Item=i16>
     where I: Iterator<Item=bool>,
 {
+    let (min, max) = iter.size_hint();
+
+    assert_eq!(min, max.unwrap());
+
     let size = iter.size_hint().1.unwrap() / CHANNEL;
 
     (0..size).map(move |_| {
         let channels = (0..CHANNEL)
             .map(|i| {
                 let bit = iter.next().unwrap();
-                carrier(i, SECTION_LEN - CYCLIC_PREFIX)
-                    .map(move |item| if bit { item } else { -item })
+                carrier(i).map(move |item| if bit { item } else { -item })
             });
 
-        Synthesizer::new(channels).take(SECTION_LEN + CYCLIC_PREFIX)
+        Synthesizer::new(channels)
     }).flatten()
 }
 
@@ -56,7 +58,7 @@ impl Modulator {
             (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
         );
 
-        bpsk_modulate(preamble).chain(ofdm_modulate(iter))
+        bpsk_modulate(preamble, PREAMBLE_CHANNEL).chain(ofdm_modulate(iter))
     }
 }
 
@@ -103,11 +105,8 @@ pub struct Demodulator {
 }
 
 impl Demodulator {
-    const PREAMBLE_CHANNEL: usize = 0;
-    const PREAMBLE_WAVE_LEN: usize = SECTION_LEN / (BASE_F + Self::PREAMBLE_CHANNEL);
-
-    const PREAMBLE_LEN: usize = (SECTION_LEN + CYCLIC_PREFIX) * BARKER.len();
-    const WINDOW_EXTRA_SIZE: usize = (SECTION_LEN + CYCLIC_PREFIX) * PRE_PREAMBLE.len();
+    const PREAMBLE_LEN: usize = SECTION_LEN * BARKER.len();
+    const WINDOW_EXTRA_SIZE: usize = SECTION_LEN * PRE_PREAMBLE.len();
     const WINDOW_CAPACITY: usize = Self::PREAMBLE_LEN + Self::WINDOW_EXTRA_SIZE;
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
     const MOVING_AVERAGE: i64 = 512;
@@ -122,15 +121,12 @@ impl Demodulator {
     fn preamble_product(&self) -> i64 {
         Self::dot_product(
             self.window.iter().skip(self.window.len() - Self::PREAMBLE_LEN).cloned(),
-            bpsk_modulate(BARKER.iter().cloned()),
+            bpsk_modulate(BARKER.iter().cloned(), PREAMBLE_CHANNEL),
         )
     }
 
     fn section_product(&self, offset: usize, channel: usize) -> i64 {
-        Self::dot_product(
-            self.window.iter().skip(offset + CYCLIC_PREFIX).cloned(),
-            carrier(channel, 0).take(SECTION_LEN),
-        )
+        Self::dot_product(self.window.iter().skip(offset).cloned(), carrier(channel))
     }
 
     fn moving_average(last: i64, new: i64) -> i64 {
@@ -181,12 +177,12 @@ impl Demodulator {
 
                 self.last_prod = prod;
 
-                self.state = if count >= Self::PREAMBLE_WAVE_LEN * 2 {
+                self.state = if count >= PREAMBLE_WAVE_LEN * 2 {
                     DemodulateState::WAITE
                 } else {
                     count += 1;
 
-                    if last_prod > prod && count >= Self::PREAMBLE_WAVE_LEN {
+                    if last_prod > prod && count >= PREAMBLE_WAVE_LEN {
                         // print!("{} {} {} ", item, threshold, prod);
 
                         if last_prod < last {
@@ -195,8 +191,8 @@ impl Demodulator {
                                 let shift = self.window.len() - Self::PREAMBLE_LEN - count;
 
                                 let prod = self.section_product(
-                                    shift + index * (SECTION_LEN + CYCLIC_PREFIX),
-                                    Self::PREAMBLE_CHANNEL,
+                                    shift + index * SECTION_LEN,
+                                    PREAMBLE_CHANNEL,
                                 );
 
                                 if *bit == (prod > 0) { 1 } else { 0 }
@@ -222,7 +218,7 @@ impl Demodulator {
             DemodulateState::RECEIVE(mut count, mut buffer) => {
                 count += 1;
 
-                self.state = if count == SECTION_LEN + CYCLIC_PREFIX {
+                self.state = if count == SECTION_LEN {
                     for i in 0..CHANNEL {
                         let prod = self.section_product(self.window.len() - count, i);
 

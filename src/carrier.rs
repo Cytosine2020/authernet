@@ -19,8 +19,8 @@ lazy_static!(
     };
 );
 
-pub fn carrier(channel: usize, shift: usize) -> impl Iterator<Item=i16> + 'static {
-    CARRIER[channel * SECTION_LEN..(channel + 1) * SECTION_LEN].iter().cycle().skip(shift).cloned()
+pub fn carrier(channel: usize) -> impl Iterator<Item=i16> + 'static {
+    CARRIER[channel * SECTION_LEN..(channel + 1) * SECTION_LEN].iter().cloned()
 }
 
 pub struct Synthesizer<T> {
