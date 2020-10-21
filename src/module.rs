@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 use crate::{
     DATA_PACK_SIZE, DataPack,
-    wave::{SECTION_LEN, BASE_F, CHANNEL, Wave, Synthesizer},
+    wave::{SECTION_LEN, BASE_F, CHANNEL, Synthesizer, carrier},
     bit_iter::ByteToBitIter,
+    mac::{SIZE_INDEX, SIZE_SIZE},
 };
-use crate::mac::SIZE_INDEX;
 
 
 const CYCLIC_PREFIX: usize = 0;
@@ -17,17 +17,17 @@ const BARKER: [bool; 11] = [
 ];
 
 
-pub fn bpsk_modulate<I>(iter: I, carrier: Wave) -> impl Iterator<Item=i16>
+fn bpsk_modulate<I>(iter: I) -> impl Iterator<Item=i16>
     where I: Iterator<Item=bool>,
 {
     iter.map(move |bit| {
-        carrier.iter(0, SECTION_LEN - CYCLIC_PREFIX)
+        carrier(0, SECTION_LEN - CYCLIC_PREFIX)
             .map(move |item| if bit { item } else { -item })
             .take(SECTION_LEN + CYCLIC_PREFIX)
     }).flatten()
 }
 
-pub fn ofdm_modulate<I>(mut iter: I, carrier: Wave) -> impl Iterator<Item=i16>
+fn ofdm_modulate<I>(mut iter: I) -> impl Iterator<Item=i16>
     where I: Iterator<Item=bool>,
 {
     let size = iter.size_hint().1.unwrap() / CHANNEL;
@@ -36,7 +36,7 @@ pub fn ofdm_modulate<I>(mut iter: I, carrier: Wave) -> impl Iterator<Item=i16>
         let channels = (0..CHANNEL)
             .map(|i| {
                 let bit = iter.next().unwrap();
-                carrier.iter(i, SECTION_LEN - CYCLIC_PREFIX)
+                carrier(i, SECTION_LEN - CYCLIC_PREFIX)
                     .map(move |item| if bit { item } else { -item })
             });
 
@@ -44,12 +44,10 @@ pub fn ofdm_modulate<I>(mut iter: I, carrier: Wave) -> impl Iterator<Item=i16>
     }).flatten()
 }
 
-pub struct Modulator {
-    carrier: Wave,
-}
+pub struct Modulator {}
 
 impl Modulator {
-    pub fn new(carrier: Wave) -> Self { Self { carrier } }
+    pub fn new() -> Self { Self {} }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
         let preamble = PRE_PREAMBLE.iter().chain(BARKER.iter()).cloned();
@@ -58,9 +56,7 @@ impl Modulator {
             (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
         );
 
-        std::iter::empty()
-            .chain(bpsk_modulate(preamble, self.carrier.clone()))
-            .chain(ofdm_modulate(iter, self.carrier.clone()))
+        bpsk_modulate(preamble).chain(ofdm_modulate(iter))
     }
 }
 
@@ -85,12 +81,12 @@ impl BitReceive {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
 
-        if self.count <= 8 {
+        if self.count <= (SIZE_INDEX + SIZE_SIZE) * 8 {
             None
         } else {
-            if self.inner[0] as usize > DATA_PACK_SIZE {
+            if self.inner[SIZE_INDEX] as usize > DATA_PACK_SIZE {
                 Some(Err(()))
-            } else if self.count < self.inner[0] as usize * 8 {
+            } else if self.count < self.inner[SIZE_INDEX] as usize * 8 {
                 None
             } else {
                 Some(Ok(self.inner))
@@ -102,8 +98,6 @@ impl BitReceive {
 pub struct Demodulator {
     window: VecDeque<i16>,
     state: DemodulateState,
-    carrier: Wave,
-    preamble: Box<[i16]>,
     last_prod: i64,
     moving_average: i64,
 }
@@ -112,8 +106,9 @@ impl Demodulator {
     const PREAMBLE_CHANNEL: usize = 0;
     const PREAMBLE_WAVE_LEN: usize = SECTION_LEN / (BASE_F + Self::PREAMBLE_CHANNEL);
 
+    const PREAMBLE_LEN: usize = (SECTION_LEN + CYCLIC_PREFIX) * BARKER.len();
     const WINDOW_EXTRA_SIZE: usize = (SECTION_LEN + CYCLIC_PREFIX) * PRE_PREAMBLE.len();
-
+    const WINDOW_CAPACITY: usize = Self::PREAMBLE_LEN + Self::WINDOW_EXTRA_SIZE;
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
     const MOVING_AVERAGE: i64 = 512;
     const ACTIVE_THRESHOLD: i64 = 256;
@@ -126,15 +121,15 @@ impl Demodulator {
 
     fn preamble_product(&self) -> i64 {
         Self::dot_product(
-            self.window.iter().skip(self.window.len() - self.preamble.len()).cloned(),
-            self.preamble.iter().cloned(),
+            self.window.iter().skip(self.window.len() - Self::PREAMBLE_LEN).cloned(),
+            bpsk_modulate(BARKER.iter().cloned()),
         )
     }
 
     fn section_product(&self, offset: usize, channel: usize) -> i64 {
         Self::dot_product(
             self.window.iter().skip(offset + CYCLIC_PREFIX).cloned(),
-            self.carrier.iter(channel, 0).take(SECTION_LEN),
+            carrier(channel, 0).take(SECTION_LEN),
         )
     }
 
@@ -142,22 +137,17 @@ impl Demodulator {
         (last * (Self::MOVING_AVERAGE - 1) + new) / Self::MOVING_AVERAGE
     }
 
-    pub fn new(carrier: Wave) -> Self {
-        let preamble = bpsk_modulate(BARKER.iter().cloned(), carrier.clone())
-            .collect::<Box<_>>();
-
+    pub fn new() -> Self {
         Self {
-            window: VecDeque::with_capacity(preamble.len() + Self::WINDOW_EXTRA_SIZE),
+            window: VecDeque::with_capacity(Self::WINDOW_CAPACITY),
             state: DemodulateState::WAITE,
-            carrier,
-            preamble,
             last_prod: 0,
             moving_average: 0,
         }
     }
 
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
-        if self.window.len() == self.preamble.len() + Self::WINDOW_EXTRA_SIZE {
+        if self.window.len() == Self::WINDOW_CAPACITY {
             self.window.pop_front();
         }
 
@@ -169,7 +159,7 @@ impl Demodulator {
 
         match self.state {
             DemodulateState::WAITE => {
-                if self.window.len() >= self.preamble.len() &&
+                if self.window.len() >= Self::PREAMBLE_LEN &&
                     self.moving_average > Self::ACTIVE_THRESHOLD {
                     let prod = self.preamble_product();
 
@@ -202,7 +192,7 @@ impl Demodulator {
                         if last_prod < last {
                             if BARKER.len() - 1 <= BARKER.iter()
                                 .enumerate().map(|(index, bit)| {
-                                let shift = self.window.len() - self.preamble.len() - count;
+                                let shift = self.window.len() - Self::PREAMBLE_LEN - count;
 
                                 let prod = self.section_product(
                                     shift + index * (SECTION_LEN + CYCLIC_PREFIX),

@@ -5,56 +5,22 @@ pub const BASE_F: usize = 3;
 pub const CHANNEL: usize = 2;
 
 
-lazy_static!(pub static ref CARRIER: Wave = Wave::new(););
+lazy_static!(
+    static ref CARRIER: [i16; CHANNEL * SECTION_LEN] = {
+        let mut wave = [0i16; CHANNEL * SECTION_LEN];
 
-#[derive(Clone)]
-struct ArcSlice<T> {
-    inner: std::sync::Arc<[T]>,
-}
+        for i in 0..CHANNEL * SECTION_LEN {
+            let rate = SECTION_LEN as f32 / (i / SECTION_LEN + BASE_F) as f32;
+            let t = (i % SECTION_LEN) as f32;
+            wave[i] = ((t * 2. * std::f32::consts::PI / rate).sin() * std::i16::MAX as f32) as i16;
+        }
 
-impl<T> ArcSlice<T> {
-    pub fn new(inner: std::sync::Arc<[T]>) -> Self { Self { inner } }
-}
+        wave
+    };
+);
 
-impl<T: Clone> ArcSlice<T> {
-    fn iter(&self, start: usize, end: usize, shift: usize) -> impl Iterator<Item=T> {
-        let clone = self.inner.clone();
-
-        (start..end).cycle().skip(shift).map(move |i| clone[i].clone())
-    }
-
-    pub fn deep_clone(&self) -> Self {
-        Self { inner: (*self.inner).into() }
-    }
-}
-
-#[derive(Clone)]
-pub struct Wave {
-    wave: ArcSlice<i16>,
-}
-
-impl Wave {
-    pub fn calculate(rate: f32, t: f32) -> f32 {
-        (t * 2. * std::f32::consts::PI / rate).sin() * std::i16::MAX as f32
-    }
-
-    pub fn new() -> Self {
-        let wave = (BASE_F..BASE_F + CHANNEL).map(|f| {
-            (0..SECTION_LEN as usize).map(move |i| {
-                Self::calculate(SECTION_LEN as f32 / f as f32, i as f32) as i16
-            })
-        }).flatten().collect();
-
-        Self { wave: ArcSlice::new(wave) }
-    }
-
-    pub fn deep_clone(&self) -> Self {
-        Self { wave: self.wave.deep_clone() }
-    }
-
-    pub fn iter(&self, channel: usize, shift: usize) -> impl Iterator<Item=i16> {
-        self.wave.clone().iter(channel * SECTION_LEN, (channel + 1) * SECTION_LEN, shift)
-    }
+pub fn carrier(channel: usize, shift: usize) -> impl Iterator<Item=i16> + 'static {
+    CARRIER[channel * SECTION_LEN..(channel + 1) * SECTION_LEN].iter().cycle().skip(shift).cloned()
 }
 
 pub struct Synthesizer<T> {

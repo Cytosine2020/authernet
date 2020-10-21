@@ -1,9 +1,6 @@
 use std::sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError};
-use cpal::{
-    Host, Sample,
-    traits::{DeviceTrait, HostTrait, StreamTrait},
-};
-use crate::{ DataPack, wave::CARRIER, module::{Modulator, Demodulator} };
+use cpal::{Host, Sample, traits::{DeviceTrait, HostTrait, StreamTrait}};
+use crate::{DataPack, module::{Modulator, Demodulator}};
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
@@ -81,7 +78,7 @@ impl Athernet {
             .filter(|item| item.sample_rate() == SAMPLE_RATE)
             .next().ok_or("expected configuration not found")?;
 
-        let modulator = Modulator::new(CARRIER.deep_clone());
+        let modulator = Modulator::new();
 
         let channel = config.channels() as usize;
 
@@ -137,7 +134,7 @@ impl Athernet {
             .filter(|item| item.sample_rate() == SAMPLE_RATE)
             .next().ok_or("expected configuration not found")?;
 
-        let mut demodulator = Demodulator::new(CARRIER.deep_clone());
+        let mut demodulator = Demodulator::new();
 
         let channel_count = config.channels() as usize;
 
