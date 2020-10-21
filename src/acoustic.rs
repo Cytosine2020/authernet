@@ -6,12 +6,12 @@ use crate::{DataPack, module::{Modulator, Demodulator}};
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 
 
-#[cfg(target_os = "windows")]
-fn get_host() -> Host {
-    cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
-}
-
-#[cfg(target_os = "macos")]
+// #[cfg(target_os = "windows")]
+// fn get_host() -> Host {
+//     cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
+// }
+//
+// #[cfg(target_os = "macos")]
 fn get_host() -> Host { cpal::default_host() }
 
 pub fn print_config() {
@@ -68,35 +68,34 @@ pub struct Athernet {
 impl Athernet {
     const IDLE_SECTION: usize = 128;
 
-    fn create_send_stream(host: &Host)
+    fn create_send_stream()
         -> Result<(Sender<DataPack>, cpal::Stream), Box<dyn std::error::Error>>
     {
-        let device = host.default_output_device().ok_or("no input device available")?;
+        let device = get_host().default_output_device().ok_or("no input device available")?;
 
         let config = device.supported_output_configs()?
             .map(|item| item.with_max_sample_rate())
             .filter(|item| item.sample_rate() == SAMPLE_RATE)
-            .next().ok_or("expected configuration not found")?;
+            .min_by_key(|item| item.channels())
+            .ok_or("expected configuration not found")?;
 
         let modulator = Modulator::new();
 
         let channel = config.channels() as usize;
-
-        let channel_handler = move |item| {
-            std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
-        };
 
         let idle_signal = move |len| {
             ChannelState::Idle(std::iter::repeat(0i16).take(len))
         };
 
         let message_signal = move |buffer| {
-            ChannelState::Message(modulator.iter(buffer).map(channel_handler).flatten())
+            ChannelState::Message(modulator.iter(buffer).map(move |item| {
+                std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
+            }).flatten())
         };
 
         let (sender, receiver) = mpsc::channel();
 
-        let mut buffer = idle_signal(32768);
+        let mut buffer = idle_signal(Self::IDLE_SECTION);
 
         let stream = device.build_output_stream(
             &config.into(),
@@ -124,15 +123,16 @@ impl Athernet {
         Ok((sender, stream))
     }
 
-    fn create_receive_stream(host: &Host)
+    fn create_receive_stream()
         -> Result<(Receiver<DataPack>, cpal::Stream), Box<dyn std::error::Error>>
     {
-        let device = host.default_input_device().ok_or("no input device available")?;
+        let device = get_host().default_input_device().ok_or("no input device available")?;
 
         let config = device.supported_input_configs()?
             .map(|item| item.with_max_sample_rate())
             .filter(|item| item.sample_rate() == SAMPLE_RATE)
-            .next().ok_or("expected configuration not found")?;
+            .min_by_key(|item| item.channels())
+            .ok_or("expected configuration not found")?;
 
         let mut demodulator = Demodulator::new();
 
@@ -164,10 +164,8 @@ impl Athernet {
     }
 
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let host = get_host();
-
-        let (sender, _input_stream) = Self::create_send_stream(&host)?;
-        let (receiver, _output_stream) = Self::create_receive_stream(&host)?;
+        let (receiver, _output_stream) = Self::create_receive_stream()?;
+        let (sender, _input_stream) = Self::create_send_stream()?;
 
         Ok(Self { sender, receiver, _input_stream, _output_stream })
     }

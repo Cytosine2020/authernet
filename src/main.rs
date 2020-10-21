@@ -15,7 +15,7 @@ use crate::{
 };
 
 
-const DATA_PACK_SIZE: usize = 64;
+const DATA_PACK_SIZE: usize = 128;
 
 pub type DataPack = [u8; DATA_PACK_SIZE];
 

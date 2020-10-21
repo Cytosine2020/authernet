@@ -14,7 +14,7 @@ const BARKER: [bool; 11] = [
     true, false, false, true, false
 ];
 
-const PREAMBLE_CHANNEL: usize = 0;
+const PREAMBLE_CHANNEL: usize = 3;
 const PREAMBLE_WAVE_LEN: usize = SECTION_LEN / (BASE_F + PREAMBLE_CHANNEL);
 
 
@@ -30,19 +30,14 @@ fn ofdm_modulate<I>(mut iter: I) -> impl Iterator<Item=i16>
     where I: Iterator<Item=bool>,
 {
     let (min, max) = iter.size_hint();
-
     assert_eq!(min, max.unwrap());
-
     let size = iter.size_hint().1.unwrap() / CHANNEL;
 
     (0..size).map(move |_| {
-        let channels = (0..CHANNEL)
-            .map(|i| {
-                let bit = iter.next().unwrap();
-                carrier(i).map(move |item| if bit { item } else { -item })
-            });
-
-        Synthesizer::new(channels)
+        Synthesizer::new((0..CHANNEL).map(|f| {
+            let bit = iter.next().unwrap();
+            carrier(f).map(move |item| if bit { item } else { -item })
+        }))
     }).flatten()
 }
 
