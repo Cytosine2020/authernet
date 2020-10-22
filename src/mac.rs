@@ -72,11 +72,21 @@ impl MacData {
     const DEST_OFFSET: u16 = Self::OP_OFFSET + Self::OP_SIZE as u16;
     const SRC_OFFSET: u16 = Self::DEST_OFFSET + Self::MAC_SIZE as u16;
 
-    pub fn from_slice(data: [u8; 2]) -> Self { Self { inner: u16::from_le_bytes(data) } }
+    pub fn from_slice(data_: &DataPack) -> Self {
+        let mut data = [0u8; 2];
+        data.copy_from_slice(&data_[MAC_INDEX..MAC_INDEX + MAC_SIZE]);
+        Self { inner: u16::from_le_bytes(data) }
+    }
 
+    #[inline]
     pub fn get_op(&self) -> u8 { (self.inner >> Self::OP_OFFSET) as u8 & Self::OP_MASK }
 
+    #[inline]
     pub fn get_dest(&self) -> u8 { (self.inner >> Self::DEST_OFFSET) as u8 & Self::MAC_MASK }
 
+    #[inline]
     pub fn get_src(&self) -> u8 { (self.inner >> Self::SRC_OFFSET) as u8 & Self::MAC_MASK }
+
+    #[inline]
+    pub fn get_mac(&self) -> (u8, u8) { (self.get_src(), self.get_dest()) }
 }

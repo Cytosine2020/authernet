@@ -133,6 +133,8 @@ impl Demodulator {
         }
     }
 
+    pub fn active(&self) -> bool { self.moving_average > Self::ACTIVE_THRESHOLD }
+
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
         if self.window.len() == Self::WINDOW_CAPACITY {
             self.window.pop_front();
@@ -146,8 +148,7 @@ impl Demodulator {
 
         match self.state {
             DemodulateState::WAITE => {
-                if self.window.len() >= Self::PREAMBLE_LEN &&
-                    self.moving_average > Self::ACTIVE_THRESHOLD {
+                if self.window.len() >= Self::PREAMBLE_LEN && self.active() {
                     let prod = self.preamble_product();
 
                     if prod > threshold && self.last_prod > prod {

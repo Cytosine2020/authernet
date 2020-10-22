@@ -63,79 +63,120 @@ impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
     }
 }
 
+enum Command {
+    Send(String),
+    Recv(String),
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = env::args().collect::<Box<_>>();
+    let mut args = env::args();
 
-    if args.len() != 3 { panic!("accept only two arguments!") }
+    args.next();
 
-    if args[1] == "-s" {
-        let sender = Athernet::new()?;
+    let mut input = Vec::new();
+    let mut output = Vec::new();
+    let mut commands = Vec::new();
 
-        let send_file = || -> Result<_, Box<dyn std::error::Error>> {
-            let file = File::open(args[2].clone())?;
+    loop {
+        if let Some(command_) = args.next() {
+            let command = command_.as_bytes();
 
-            assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
-
-            let iter = BitToByteIter::from(file.bytes().map(|byte| {
-                match byte.unwrap() as char {
-                    '0' => false,
-                    '1' => true,
-                    _ => panic!(),
-                }
-            }));
-
-            for data_pack in FileRead::new(iter) {
-                sender.send(&data_pack)?;
+            if command[0] as char != '-' || command.len() != 2 {
+                return Err(String::from(
+                    format!("unknown command: {:?}", command_).to_owned()
+                ).into());
             }
 
-            Ok(())
-        };
-
-        send_file()?;
-
-        send_file()?;
-
-        std::thread::sleep(std::time::Duration::from_secs(3));
-    } else if args[1] == "-r" {
-        let receiver = Athernet::new()?;
-
-        let mut flag = [false; PACK_NUM];
-        let mut all_data = [0u8; BYTE_NUM];
-        let mut count = 0;
-
-        loop {
-            if let Some(data) = crc_unwrap(&receiver.recv()?) {
-                let num = data[0] as usize;
-
-                if !flag[num] {
-                    flag[num] = true;
-
-                    let point = num * PAYLOAD_SIZE;
-
-                    all_data[point..point + data.len() - CRC_SIZE]
-                        .copy_from_slice(&data[1..]);
-
-                    count += 1;
-
-                    println!("receive {}", num);
-
-                    if count == PACK_NUM {
-                        let data = ByteToBitIter::from(all_data.iter().cloned())
-                            .take(FILE_SIZE).map(|bit| if bit { '1' } else { '0' } as u8)
-                            .collect::<Box<_>>();
-
-                        assert_eq!(data.len(), FILE_SIZE);
-
-                        File::create(args[2].clone())?.write_all(&data).unwrap();
-                        break;
-                    }
+            if let Some(arg) = args.next() {
+                match command[1] as char {
+                    'i' => input.push(arg),
+                    'o' => output.push(arg),
+                    's' => commands.push(Command::Send(arg)),
+                    'r' => commands.push(Command::Recv(arg)),
+                    _ => return Err(String::from(
+                        format!("unknown command: {:?}", command_).to_owned()
+                    ).into()),
                 }
             } else {
-                println!("crc fail!");
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    let athernet = Athernet::new(input, output)?;
+
+    for command in commands {
+        match command {
+            Command::Send(file) => {
+
+                let send_file = |file| -> Result<_, Box<dyn std::error::Error>> {
+                    let file = File::open(file)?;
+
+                    assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
+
+                    let iter = BitToByteIter::from(file.bytes()
+                        .map(|byte| {
+                            match byte.unwrap() as char {
+                                '0' => false,
+                                '1' => true,
+                                _ => panic!(),
+                            }
+                        }));
+
+                    for data_pack in FileRead::new(iter) {
+                        athernet.send(&data_pack)?;
+                    }
+
+                    Ok(())
+                };
+
+                send_file(file.clone())?;
+
+                send_file(file)?;
+
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+            Command::Recv(file) => {
+                let mut flag = [false; PACK_NUM];
+                let mut all_data = [0u8; BYTE_NUM];
+                let mut count = 0;
+
+                loop {
+                    if let Some(data) = crc_unwrap(&athernet.recv()?) {
+                        let num = data[0] as usize;
+
+                        if !flag[num] {
+                            flag[num] = true;
+
+                            let point = num * PAYLOAD_SIZE;
+
+                            all_data[point..point + data.len() - CRC_SIZE]
+                                .copy_from_slice(&data[1..]);
+
+                            count += 1;
+
+                            println!("receive {}", num);
+
+                            if count == PACK_NUM {
+                                let data = ByteToBitIter::from(all_data.iter().cloned())
+                                    .take(FILE_SIZE)
+                                    .map(|bit| if bit { '1' } else { '0' } as u8)
+                                    .collect::<Box<_>>();
+
+                                assert_eq!(data.len(), FILE_SIZE);
+
+                                File::create(file)?.write_all(&data).unwrap();
+                                break;
+                            }
+                        }
+                    } else {
+                        println!("crc fail!");
+                    }
+                }
             }
         }
-    } else {
-        panic!("unknown command: {}", args[1]);
     }
 
     Ok(())

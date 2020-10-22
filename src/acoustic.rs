@@ -2,25 +2,67 @@ use std::sync::{
     Arc, atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError},
 };
-use cpal::{Host, Sample, traits::{DeviceTrait, HostTrait, StreamTrait}};
-use crate::{DataPack, module::{Modulator, Demodulator}};
-use crate::acoustic::SendState::WaitAck;
+use cpal::{Host, Device, Sample, traits::{DeviceTrait, HostTrait, StreamTrait}};
+use crate::{DataPack, mac::MacData, module::{Modulator, Demodulator}};
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const ACK_TIMEOUT: usize = 256;
 const BACK_OFF_WINDOW: usize = 256;
 
-// #[cfg(target_os = "windows")]
-// fn get_host() -> Host {
-//     cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
-// }
-//
-// #[cfg(target_os = "macos")]
-fn get_host() -> Host { cpal::default_host() }
+
+pub fn select_host() -> Host { cpal::default_host() }
+
+pub fn select_input_device(
+    host: &Host, hint: Vec<String>,
+) -> Result<Device, Box<dyn std::error::Error>> {
+    if hint.is_empty() {
+        return Ok(host.default_input_device().ok_or("no input device available")?);
+    }
+
+    let mut devices = host.input_devices()?
+        .filter_map(|item| item.name().map(|name| (item, name)).ok())
+        .filter(|(_, device)| {
+            hint.iter().any(|name| device.find(name).is_some())
+        }).map(|(device, _)| device);
+
+    if let Some(device) = devices.next() {
+        if let Some(_) = devices.next() {
+            Err("multiple input device available!")?
+        } else {
+            Ok(device)
+        }
+    } else {
+        Err("no input device available!")?
+    }
+}
+
+pub fn select_output_device(
+    host: &Host, hint: Vec<String>,
+) -> Result<Device, Box<dyn std::error::Error>> {
+    if hint.is_empty() {
+        return Ok(host.default_output_device().ok_or("no input device available")?);
+    }
+
+    let mut devices = host.output_devices()?
+        .filter_map(|item| item.name().map(|name| (item, name)).ok())
+        .filter(|(_, device)| {
+            hint.iter().any(|name| device.find(name).is_some())
+        }).map(|(device, _)| device);
+
+    if let Some(device) = devices.next() {
+        if let Some(_) = devices.next() {
+            Err("multiple output device available!")?
+        } else {
+            Ok(device)
+        }
+    } else {
+        Err("no output device available!")?
+    }
+}
 
 pub fn print_config() {
-    let host = get_host();
+    let host = select_host();
 
     println!("Host: {:?}", host.id());
 
@@ -60,7 +102,7 @@ impl<I: Iterator<Item=i16>> Iterator for SendState<I> {
             if let Some(item) = iter.next() {
                 Some(item)
             } else {
-                *self = WaitAck(*buffer, ACK_TIMEOUT);
+                *self = SendState::WaitAck(*buffer, ACK_TIMEOUT);
                 Some(0)
             }
         } else {
@@ -78,12 +120,11 @@ pub struct Athernet {
 
 impl Athernet {
     fn create_send_stream(
+        device: Device,
         guard: Arc<AtomicBool>,
         _ack_send_receiver: Receiver<(u8, u8)>,
         ack_rcev_receiver: Receiver<(u8, u8)>,
     ) -> Result<(Sender<DataPack>, cpal::Stream), Box<dyn std::error::Error>> {
-        let device = get_host().default_output_device().ok_or("no input device available")?;
-
         let config = device.supported_output_configs()?
             .map(|item| item.with_max_sample_rate())
             .filter(|item| item.sample_rate() == SAMPLE_RATE)
@@ -114,14 +155,14 @@ impl Athernet {
                         if channel_free {
                             match receiver.try_recv() {
                                 Ok(buffer) => send_state = message_signal(buffer),
-                                Err(TryRecvError::Empty) => {},
+                                Err(TryRecvError::Empty) => {}
                                 Err(err) => panic!(err),
                             }
                         }
-                    },
+                    }
                     SendState::Sending(buffer, _) => {
                         send_state = SendState::BackOff(buffer, BACK_OFF_WINDOW);
-                    },
+                    }
                     SendState::BackOff(buffer, time) => {
                         send_state = if data.len() < time {
                             SendState::BackOff(buffer, time - data.len())
@@ -132,16 +173,20 @@ impl Athernet {
                                 SendState::BackOff(buffer, BACK_OFF_WINDOW)
                             }
                         };
-                    },
+                    }
                     SendState::WaitAck(buffer, time) => {
                         send_state = if data.len() < time {
                             match ack_rcev_receiver.try_recv() {
-                                Ok((src, dest)) => {
-                                    // todo: check mac address
-
-                                    SendState::Idle
-                                },
-                                Err(TryRecvError::Empty) => SendState::WaitAck(buffer, time),
+                                Ok(mac) => {
+                                    if mac == MacData::from_slice(&buffer).get_mac() {
+                                        SendState::Idle
+                                    } else {
+                                        SendState::WaitAck(buffer, time - data.len())
+                                    }
+                                }
+                                Err(TryRecvError::Empty) => {
+                                    SendState::WaitAck(buffer, time - data.len())
+                                }
                                 Err(err) => panic!(err),
                             }
                         } else if channel_free {
@@ -149,7 +194,7 @@ impl Athernet {
                         } else {
                             SendState::BackOff(buffer, BACK_OFF_WINDOW)
                         };
-                    },
+                    }
                 }
 
                 for sample in data.iter_mut() {
@@ -166,12 +211,11 @@ impl Athernet {
     }
 
     fn create_receive_stream(
-        _guard: Arc<AtomicBool>,
+        device: Device,
+        guard: Arc<AtomicBool>,
         _ack_send_sender: Sender<(u8, u8)>,
         _ack_rcev_sender: Sender<(u8, u8)>,
     ) -> Result<(Receiver<DataPack>, cpal::Stream), Box<dyn std::error::Error>> {
-        let device = get_host().default_input_device().ok_or("no input device available")?;
-
         let config = device.supported_input_configs()?
             .map(|item| item.with_max_sample_rate())
             .filter(|item| item.sample_rate() == SAMPLE_RATE)
@@ -185,6 +229,7 @@ impl Athernet {
         let (sender, receiver) = mpsc::channel();
 
         let mut channel = 0;
+        let mut channel_free = false;
 
         let stream = device.build_input_stream(
             &config.into(),
@@ -195,6 +240,11 @@ impl Athernet {
 
                         channel += 1;
                         if channel == channel_count { channel = 0; }
+                    }
+
+                    if channel_free == demodulator.active() {
+                        channel_free = !demodulator.active();
+                        guard.store(channel_free, Ordering::SeqCst);
                     }
                 }
             },
@@ -207,17 +257,22 @@ impl Athernet {
         Ok((receiver, stream))
     }
 
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let guard = Arc::new(AtomicBool::new(true));
+    pub fn new(
+        input: Vec<String>, output: Vec<String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let guard = Arc::new(AtomicBool::new(false));
+        let host = select_host();
 
         let (ack_send_sender, ack_send_receiver) = mpsc::channel::<(u8, u8)>();
         let (ack_recv_sender, ack_recv_receiver) = mpsc::channel::<(u8, u8)>();
 
         let (receiver, _output_stream) = Self::create_receive_stream(
-            guard.clone(), ack_send_sender, ack_recv_sender,
+            select_input_device(&host, input)?, guard.clone(),
+            ack_send_sender, ack_recv_sender,
         )?;
         let (sender, _input_stream) = Self::create_send_stream(
-            guard.clone(), ack_send_receiver, ack_recv_receiver,
+            select_output_device(&host, output)?, guard.clone(),
+            ack_send_receiver, ack_recv_receiver,
         )?;
 
         Ok(Self { sender, receiver, _input_stream, _output_stream })
