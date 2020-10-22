@@ -18,20 +18,16 @@ const PREAMBLE_CHANNEL: usize = 3;
 const PREAMBLE_WAVE_LEN: usize = SECTION_LEN / (BASE_F + PREAMBLE_CHANNEL);
 
 
-fn bpsk_modulate<I>(iter: I, channel: usize) -> impl Iterator<Item=i16>
-    where I: Iterator<Item=bool>,
-{
+fn bpsk_modulate<I: Iterator<Item=bool>>(iter: I, channel: usize) -> impl Iterator<Item=i16> {
     iter.map(move |bit| {
         carrier(channel).map(move |item| if bit { item } else { -item })
     }).flatten()
 }
 
-fn ofdm_modulate<I>(mut iter: I) -> impl Iterator<Item=i16>
-    where I: Iterator<Item=bool>,
-{
+fn ofdm_modulate<I: Iterator<Item=bool>>(mut iter: I) -> impl Iterator<Item=i16> {
     let (min, max) = iter.size_hint();
     assert_eq!(min, max.unwrap());
-    let size = iter.size_hint().1.unwrap() / CHANNEL;
+    let size = max.unwrap() / CHANNEL;
 
     (0..size).map(move |_| {
         Synthesizer::new((0..CHANNEL).map(|f| {
@@ -55,12 +51,6 @@ impl Modulator {
 
         bpsk_modulate(preamble, PREAMBLE_CHANNEL).chain(ofdm_modulate(iter))
     }
-}
-
-enum DemodulateState {
-    WAITE,
-    MATCH(usize, i64),
-    RECEIVE(usize, BitReceive),
 }
 
 #[derive(Copy, Clone)]
@@ -90,6 +80,12 @@ impl BitReceive {
             }
         }
     }
+}
+
+enum DemodulateState {
+    WAITE,
+    MATCH(usize, i64),
+    RECEIVE(usize, BitReceive),
 }
 
 pub struct Demodulator {
@@ -155,8 +151,6 @@ impl Demodulator {
                     let prod = self.preamble_product();
 
                     if prod > threshold && self.last_prod > prod {
-                        // print!("{} {} {} ", item, threshold, prod);
-
                         self.state = DemodulateState::MATCH(1, self.last_prod);
                     }
 
@@ -178,8 +172,6 @@ impl Demodulator {
                     count += 1;
 
                     if last_prod > prod && count >= PREAMBLE_WAVE_LEN {
-                        // print!("{} {} {} ", item, threshold, prod);
-
                         if last_prod < last {
                             if BARKER.len() - 1 <= BARKER.iter()
                                 .enumerate().map(|(index, bit)| {
@@ -192,14 +184,11 @@ impl Demodulator {
 
                                 if *bit == (prod > 0) { 1 } else { 0 }
                             }).sum::<usize>() {
-                                // println!("match {} {}", self.moving_average, last_prod);
 
                                 self.last_prod = 0;
 
                                 DemodulateState::RECEIVE(count, BitReceive::new())
                             } else {
-                                // println!("preamble decode failed");
-
                                 DemodulateState::WAITE
                             }
                         } else {
@@ -237,8 +226,6 @@ impl Demodulator {
                 }
             }
         }
-
-        // eprintln!("{}\t{}", threshold, self.last_prod);
 
         None
     }

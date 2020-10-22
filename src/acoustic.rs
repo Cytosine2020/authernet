@@ -1,10 +1,15 @@
-use std::sync::mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError};
+use std::sync::{
+    Arc, atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError},
+};
 use cpal::{Host, Sample, traits::{DeviceTrait, HostTrait, StreamTrait}};
 use crate::{DataPack, module::{Modulator, Demodulator}};
+use crate::acoustic::SendState::WaitAck;
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-
+const ACK_TIMEOUT: usize = 256;
+const BACK_OFF_WINDOW: usize = 256;
 
 // #[cfg(target_os = "windows")]
 // fn get_host() -> Host {
@@ -40,20 +45,26 @@ pub fn print_config() {
     }
 }
 
-pub enum ChannelState<I, U> {
-    Message(I),
-    Idle(U),
+enum SendState<I> {
+    Idle,
+    Sending(DataPack, I),
+    BackOff(DataPack, usize),
+    WaitAck(DataPack, usize),
 }
 
-impl<I, U> Iterator for ChannelState<I, U>
-    where I: Iterator<Item=i16>, U: Iterator<Item=i16>,
-{
+impl<I: Iterator<Item=i16>> Iterator for SendState<I> {
     type Item = i16;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Message(ref mut iter) => iter.next(),
-            Self::Idle(ref mut iter) => iter.next(),
+        if let Self::Sending(buffer, iter) = self {
+            if let Some(item) = iter.next() {
+                Some(item)
+            } else {
+                *self = WaitAck(*buffer, ACK_TIMEOUT);
+                Some(0)
+            }
+        } else {
+            Some(0)
         }
     }
 }
@@ -66,11 +77,11 @@ pub struct Athernet {
 }
 
 impl Athernet {
-    const IDLE_SECTION: usize = 128;
-
-    fn create_send_stream()
-        -> Result<(Sender<DataPack>, cpal::Stream), Box<dyn std::error::Error>>
-    {
+    fn create_send_stream(
+        guard: Arc<AtomicBool>,
+        _ack_send_receiver: Receiver<(u8, u8)>,
+        ack_rcev_receiver: Receiver<(u8, u8)>,
+    ) -> Result<(Sender<DataPack>, cpal::Stream), Box<dyn std::error::Error>> {
         let device = get_host().default_output_device().ok_or("no input device available")?;
 
         let config = device.supported_output_configs()?
@@ -83,35 +94,66 @@ impl Athernet {
 
         let channel = config.channels() as usize;
 
-        let idle_signal = move |len| {
-            ChannelState::Idle(std::iter::repeat(0i16).take(len))
-        };
+        let (sender, receiver) = mpsc::channel();
 
-        let message_signal = move |buffer| {
-            ChannelState::Message(modulator.iter(buffer).map(move |item| {
+        let message_signal = move |data| {
+            SendState::Sending(data, modulator.iter(data).map(move |item| {
                 std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
             }).flatten())
         };
 
-        let (sender, receiver) = mpsc::channel();
-
-        let mut buffer = idle_signal(Self::IDLE_SECTION);
+        let mut send_state = SendState::Idle;
 
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _| {
-                for sample in data.iter_mut() {
-                    let value = buffer.next().unwrap_or_else(|| {
-                        buffer = match receiver.try_recv() {
-                            Ok(buffer) => message_signal(buffer),
-                            Err(TryRecvError::Empty) => idle_signal(Self::IDLE_SECTION),
-                            Err(err) => panic!(err),
+                let channel_free = guard.load(Ordering::SeqCst);
+
+                match send_state {
+                    SendState::Idle => {
+                        if channel_free {
+                            match receiver.try_recv() {
+                                Ok(buffer) => send_state = message_signal(buffer),
+                                Err(TryRecvError::Empty) => {},
+                                Err(err) => panic!(err),
+                            }
+                        }
+                    },
+                    SendState::Sending(buffer, _) => {
+                        send_state = SendState::BackOff(buffer, BACK_OFF_WINDOW);
+                    },
+                    SendState::BackOff(buffer, time) => {
+                        send_state = if data.len() < time {
+                            SendState::BackOff(buffer, time - data.len())
+                        } else {
+                            if channel_free {
+                                message_signal(buffer)
+                            } else {
+                                SendState::BackOff(buffer, BACK_OFF_WINDOW)
+                            }
                         };
+                    },
+                    SendState::WaitAck(buffer, time) => {
+                        send_state = if data.len() < time {
+                            match ack_rcev_receiver.try_recv() {
+                                Ok((src, dest)) => {
+                                    // todo: check mac address
 
-                        buffer.next().unwrap()
-                    });
+                                    SendState::Idle
+                                },
+                                Err(TryRecvError::Empty) => SendState::WaitAck(buffer, time),
+                                Err(err) => panic!(err),
+                            }
+                        } else if channel_free {
+                            message_signal(buffer)
+                        } else {
+                            SendState::BackOff(buffer, BACK_OFF_WINDOW)
+                        };
+                    },
+                }
 
-                    *sample = Sample::from(&value);
+                for sample in data.iter_mut() {
+                    *sample = Sample::from(&send_state.next().unwrap());
                 }
             },
             |err| {
@@ -123,9 +165,11 @@ impl Athernet {
         Ok((sender, stream))
     }
 
-    fn create_receive_stream()
-        -> Result<(Receiver<DataPack>, cpal::Stream), Box<dyn std::error::Error>>
-    {
+    fn create_receive_stream(
+        _guard: Arc<AtomicBool>,
+        _ack_send_sender: Sender<(u8, u8)>,
+        _ack_rcev_sender: Sender<(u8, u8)>,
+    ) -> Result<(Receiver<DataPack>, cpal::Stream), Box<dyn std::error::Error>> {
         let device = get_host().default_input_device().ok_or("no input device available")?;
 
         let config = device.supported_input_configs()?
@@ -164,8 +208,17 @@ impl Athernet {
     }
 
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let (receiver, _output_stream) = Self::create_receive_stream()?;
-        let (sender, _input_stream) = Self::create_send_stream()?;
+        let guard = Arc::new(AtomicBool::new(true));
+
+        let (ack_send_sender, ack_send_receiver) = mpsc::channel::<(u8, u8)>();
+        let (ack_recv_sender, ack_recv_receiver) = mpsc::channel::<(u8, u8)>();
+
+        let (receiver, _output_stream) = Self::create_receive_stream(
+            guard.clone(), ack_send_sender, ack_recv_sender,
+        )?;
+        let (sender, _input_stream) = Self::create_send_stream(
+            guard.clone(), ack_send_receiver, ack_recv_receiver,
+        )?;
 
         Ok(Self { sender, receiver, _input_stream, _output_stream })
     }

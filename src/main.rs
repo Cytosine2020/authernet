@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         send_file()?;
 
-        std::thread::sleep(std::time::Duration::from_secs(15));
+        std::thread::sleep(std::time::Duration::from_secs(3));
     } else if args[1] == "-r" {
         let receiver = Athernet::new()?;
 
