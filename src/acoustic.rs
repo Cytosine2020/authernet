@@ -2,7 +2,10 @@ use std::sync::{
     Arc, atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError},
 };
-use cpal::{Host, Device, Sample, traits::{DeviceTrait, HostTrait, StreamTrait}};
+use cpal::{
+    Host, Device, Sample, SupportedStreamConfig, SupportedStreamConfigRange,
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+};
 use crate::{DataPack, mac::MacData, module::{Modulator, Demodulator}};
 
 
@@ -13,52 +16,13 @@ const BACK_OFF_WINDOW: usize = 256;
 
 pub fn select_host() -> Host { cpal::default_host() }
 
-pub fn select_input_device(
-    host: &Host, hint: Vec<String>,
-) -> Result<Device, Box<dyn std::error::Error>> {
-    if hint.is_empty() {
-        return Ok(host.default_input_device().ok_or("no input device available")?);
-    }
-
-    let mut devices = host.input_devices()?
-        .filter_map(|item| item.name().map(|name| (item, name)).ok())
-        .filter(|(_, device)| {
-            hint.iter().any(|name| device.find(name).is_some())
-        }).map(|(device, _)| device);
-
-    if let Some(device) = devices.next() {
-        if let Some(_) = devices.next() {
-            Err("multiple input device available!")?
-        } else {
-            Ok(device)
-        }
-    } else {
-        Err("no input device available!")?
-    }
-}
-
-pub fn select_output_device(
-    host: &Host, hint: Vec<String>,
-) -> Result<Device, Box<dyn std::error::Error>> {
-    if hint.is_empty() {
-        return Ok(host.default_output_device().ok_or("no input device available")?);
-    }
-
-    let mut devices = host.output_devices()?
-        .filter_map(|item| item.name().map(|name| (item, name)).ok())
-        .filter(|(_, device)| {
-            hint.iter().any(|name| device.find(name).is_some())
-        }).map(|(device, _)| device);
-
-    if let Some(device) = devices.next() {
-        if let Some(_) = devices.next() {
-            Err("multiple output device available!")?
-        } else {
-            Ok(device)
-        }
-    } else {
-        Err("no output device available!")?
-    }
+pub fn select_config<T: Iterator<Item=SupportedStreamConfigRange>>(
+    config: T
+) -> Result<SupportedStreamConfig, Box<dyn std::error::Error>> {
+    Ok(config.map(|item| item.with_max_sample_rate())
+        .filter(|item| item.sample_rate() == SAMPLE_RATE)
+        .min_by_key(|item| item.channels())
+        .ok_or("expected configuration not found")?)
 }
 
 pub fn print_config() {
@@ -125,11 +89,7 @@ impl Athernet {
         _ack_send_receiver: Receiver<(u8, u8)>,
         ack_rcev_receiver: Receiver<(u8, u8)>,
     ) -> Result<(Sender<DataPack>, cpal::Stream), Box<dyn std::error::Error>> {
-        let config = device.supported_output_configs()?
-            .map(|item| item.with_max_sample_rate())
-            .filter(|item| item.sample_rate() == SAMPLE_RATE)
-            .min_by_key(|item| item.channels())
-            .ok_or("expected configuration not found")?;
+        let config = select_config(device.supported_output_configs()?)?;
 
         let modulator = Modulator::new();
 
@@ -177,8 +137,8 @@ impl Athernet {
                     SendState::WaitAck(buffer, time) => {
                         send_state = if data.len() < time {
                             match ack_rcev_receiver.try_recv() {
-                                Ok(mac) => {
-                                    if mac == MacData::from_slice(&buffer).get_mac() {
+                                Ok((src, dest)) => {
+                                    if (src, dest) == MacData::from_slice(&buffer).get_mac() {
                                         SendState::Idle
                                     } else {
                                         SendState::WaitAck(buffer, time - data.len())
@@ -213,14 +173,10 @@ impl Athernet {
     fn create_receive_stream(
         device: Device,
         guard: Arc<AtomicBool>,
-        _ack_send_sender: Sender<(u8, u8)>,
-        _ack_rcev_sender: Sender<(u8, u8)>,
+        ack_send_sender: Sender<(u8, u8)>,
+        ack_rcev_sender: Sender<(u8, u8)>,
     ) -> Result<(Receiver<DataPack>, cpal::Stream), Box<dyn std::error::Error>> {
-        let config = device.supported_input_configs()?
-            .map(|item| item.with_max_sample_rate())
-            .filter(|item| item.sample_rate() == SAMPLE_RATE)
-            .min_by_key(|item| item.channels())
-            .ok_or("expected configuration not found")?;
+        let config = select_config(device.supported_input_configs()?)?;
 
         let mut demodulator = Demodulator::new();
 
@@ -235,17 +191,32 @@ impl Athernet {
             &config.into(),
             move |data: &[f32], _| {
                 for sample in data.iter() {
-                    if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
-                        if channel == 0 { sender.send(buffer).unwrap(); }
+                    if channel == 0 {
+                        if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
 
-                        channel += 1;
-                        if channel == channel_count { channel = 0; }
+
+                            let mac_data = MacData::from_slice(&buffer);
+
+                            match mac_data.get_op() {
+                                MacData::ACK => {
+                                    ack_rcev_sender.send(mac_data.get_mac()).unwrap();
+                                }
+                                MacData::DATA => {
+                                    sender.send(buffer).unwrap();
+                                    ack_send_sender.send(mac_data.get_mac()).unwrap();
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if channel_free == demodulator.active() {
+                            channel_free = !demodulator.active();
+                            guard.store(channel_free, Ordering::SeqCst);
+                        }
                     }
 
-                    if channel_free == demodulator.active() {
-                        channel_free = !demodulator.active();
-                        guard.store(channel_free, Ordering::SeqCst);
-                    }
+                    channel += 1;
+                    if channel == channel_count { channel = 0; }
                 }
             },
             |err| {
@@ -257,9 +228,7 @@ impl Athernet {
         Ok((receiver, stream))
     }
 
-    pub fn new(
-        input: Vec<String>, output: Vec<String>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let guard = Arc::new(AtomicBool::new(false));
         let host = select_host();
 
@@ -267,12 +236,12 @@ impl Athernet {
         let (ack_recv_sender, ack_recv_receiver) = mpsc::channel::<(u8, u8)>();
 
         let (receiver, _output_stream) = Self::create_receive_stream(
-            select_input_device(&host, input)?, guard.clone(),
-            ack_send_sender, ack_recv_sender,
+            host.default_input_device().ok_or("no input device available!")?,
+            guard.clone(), ack_send_sender, ack_recv_sender,
         )?;
         let (sender, _input_stream) = Self::create_send_stream(
-            select_output_device(&host, output)?, guard.clone(),
-            ack_send_receiver, ack_recv_receiver,
+            host.default_output_device().ok_or("no output device available!")?,
+            guard.clone(), ack_send_receiver, ack_recv_receiver,
         )?;
 
         Ok(Self { sender, receiver, _input_stream, _output_stream })

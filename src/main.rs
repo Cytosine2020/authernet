@@ -73,8 +73,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     args.next();
 
-    let mut input = Vec::new();
-    let mut output = Vec::new();
     let mut commands = Vec::new();
 
     loop {
@@ -89,8 +87,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Some(arg) = args.next() {
                 match command[1] as char {
-                    'i' => input.push(arg),
-                    'o' => output.push(arg),
                     's' => commands.push(Command::Send(arg)),
                     'r' => commands.push(Command::Recv(arg)),
                     _ => return Err(String::from(
@@ -105,12 +101,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let athernet = Athernet::new(input, output)?;
+    let athernet = Athernet::new()?;
 
     for command in commands {
         match command {
             Command::Send(file) => {
-
                 let send_file = |file| -> Result<_, Box<dyn std::error::Error>> {
                     let file = File::open(file)?;
 

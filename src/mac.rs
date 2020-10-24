@@ -43,12 +43,14 @@ fn crc_calculate(data: &[u8]) -> u8 {
     crc
 }
 
+#[inline]
 pub fn crc_generate(data: &mut DataPack) {
     let size = data[SIZE_INDEX] as usize;
 
     data[size - CRC_SIZE] = crc_calculate(&data[..size - CRC_SIZE]);
 }
 
+#[inline]
 pub fn crc_unwrap(data: &DataPack) -> Option<&[u8]> {
     let size = data[SIZE_INDEX] as usize;
 
@@ -72,10 +74,22 @@ impl MacData {
     const DEST_OFFSET: u16 = Self::OP_OFFSET + Self::OP_SIZE as u16;
     const SRC_OFFSET: u16 = Self::DEST_OFFSET + Self::MAC_SIZE as u16;
 
+    pub const DATA: u8 = 0b0000;
+    pub const ACK: u8 = 0b1111;
+
+    #[inline]
     pub fn from_slice(data_: &DataPack) -> Self {
         let mut data = [0u8; 2];
         data.copy_from_slice(&data_[MAC_INDEX..MAC_INDEX + MAC_SIZE]);
         Self { inner: u16::from_le_bytes(data) }
+    }
+
+    #[inline]
+    pub fn new(op: u8, dest: u8, src: u8) -> Self {
+        let inner = (((op & Self::OP_MASK) as u16) << Self::OP_OFFSET )|
+            (((dest & Self::MAC_MASK) as u16) << Self::DEST_OFFSET) |
+            (((src & Self::MAC_MASK) as u16)  << Self::SRC_OFFSET) ;
+        Self { inner }
     }
 
     #[inline]
