@@ -7,8 +7,6 @@ use crate::{
 };
 
 
-const PRE_PREAMBLE: [bool; 5] = [false, true, false, true, false];
-
 const BARKER: [bool; 11] = [
     true, true, true, false, false, false,
     true, false, false, true, false
@@ -27,11 +25,11 @@ fn bpsk_modulate<I: Iterator<Item=bool>>(iter: I, channel: usize) -> impl Iterat
 fn ofdm_modulate<I: Iterator<Item=bool>>(mut iter: I) -> impl Iterator<Item=i16> {
     let (min, max) = iter.size_hint();
     assert_eq!(min, max.unwrap());
-    let size = max.unwrap() / CHANNEL;
+    let size = (max.unwrap() + CHANNEL - 1) / CHANNEL;
 
     (0..size).map(move |_| {
         Synthesizer::new((0..CHANNEL).map(|f| {
-            let bit = iter.next().unwrap();
+            let bit = iter.next().unwrap_or(false);
             carrier(f).map(move |item| if bit { item } else { -item })
         }))
     }).flatten()
@@ -43,13 +41,15 @@ impl Modulator {
     pub fn new() -> Self { Self {} }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        let preamble = PRE_PREAMBLE.iter().chain(BARKER.iter()).cloned();
+        let preamble = BARKER.iter().cloned();
 
         let iter = ByteToBitIter::from(
             (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
         );
 
-        bpsk_modulate(preamble, PREAMBLE_CHANNEL).chain(ofdm_modulate(iter))
+        std::iter::repeat(0).take(SECTION_LEN * 5)
+            .chain(bpsk_modulate(preamble, PREAMBLE_CHANNEL))
+            .chain(ofdm_modulate(iter))
     }
 }
 
@@ -97,7 +97,7 @@ pub struct Demodulator {
 
 impl Demodulator {
     const PREAMBLE_LEN: usize = SECTION_LEN * BARKER.len();
-    const WINDOW_EXTRA_SIZE: usize = SECTION_LEN * PRE_PREAMBLE.len();
+    const WINDOW_EXTRA_SIZE: usize = SECTION_LEN * 5;
     const WINDOW_CAPACITY: usize = Self::PREAMBLE_LEN + Self::WINDOW_EXTRA_SIZE;
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
     const MOVING_AVERAGE: i64 = 512;
@@ -193,7 +193,6 @@ impl Demodulator {
 
                                 if *bit == (prod > 0) { 1 } else { 0 }
                             }).sum::<usize>() {
-
                                 self.last_prod = 0;
 
                                 DemodulateState::RECEIVE(count, BitReceive::new())

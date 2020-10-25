@@ -6,12 +6,17 @@ use cpal::{
     Host, Device, Sample, SupportedStreamConfig, SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use crate::{DataPack, mac::MacData, module::{Modulator, Demodulator}};
+use crate::{
+    DataPack,
+    mac::{MacData, MacLayer},
+    module::{Modulator, Demodulator},
+};
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const ACK_TIMEOUT: usize = 256;
 const BACK_OFF_WINDOW: usize = 256;
+const IDLE_SECTION: usize = 256;
 
 
 pub fn select_host() -> Host { cpal::default_host() }
@@ -52,27 +57,10 @@ pub fn print_config() {
 }
 
 enum SendState<I> {
-    Idle,
+    Idle(usize),
     Sending(DataPack, I),
-    BackOff(DataPack, usize),
+    // BackOff(DataPack, usize),
     WaitAck(DataPack, usize),
-}
-
-impl<I: Iterator<Item=i16>> Iterator for SendState<I> {
-    type Item = i16;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Self::Sending(buffer, iter) = self {
-            if let Some(item) = iter.next() {
-                Some(item)
-            } else {
-                *self = SendState::WaitAck(*buffer, ACK_TIMEOUT);
-                Some(0)
-            }
-        } else {
-            Some(0)
-        }
-    }
 }
 
 pub struct Athernet {
@@ -84,10 +72,11 @@ pub struct Athernet {
 
 impl Athernet {
     fn create_send_stream(
+        mac_layer: MacLayer,
         device: Device,
-        guard: Arc<AtomicBool>,
-        _ack_send_receiver: Receiver<(u8, u8)>,
-        ack_rcev_receiver: Receiver<(u8, u8)>,
+        _guard: Arc<AtomicBool>,
+        ack_send_receiver: Receiver<u8>,
+        ack_recv_receiver: Receiver<u8>,
     ) -> Result<(Sender<DataPack>, cpal::Stream), Box<dyn std::error::Error>> {
         let config = select_config(device.supported_output_configs()?)?;
 
@@ -103,62 +92,102 @@ impl Athernet {
             }).flatten())
         };
 
-        let mut send_state = SendState::Idle;
+        let mut send_state = SendState::Idle(IDLE_SECTION);
 
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _| {
-                let channel_free = guard.load(Ordering::SeqCst);
-
-                match send_state {
-                    SendState::Idle => {
-                        if channel_free {
-                            match receiver.try_recv() {
-                                Ok(buffer) => send_state = message_signal(buffer),
-                                Err(TryRecvError::Empty) => {}
-                                Err(err) => panic!(err),
-                            }
-                        }
-                    }
-                    SendState::Sending(buffer, _) => {
-                        send_state = SendState::BackOff(buffer, BACK_OFF_WINDOW);
-                    }
-                    SendState::BackOff(buffer, time) => {
-                        send_state = if data.len() < time {
-                            SendState::BackOff(buffer, time - data.len())
-                        } else {
-                            if channel_free {
-                                message_signal(buffer)
-                            } else {
-                                SendState::BackOff(buffer, BACK_OFF_WINDOW)
-                            }
-                        };
-                    }
-                    SendState::WaitAck(buffer, time) => {
-                        send_state = if data.len() < time {
-                            match ack_rcev_receiver.try_recv() {
-                                Ok((src, dest)) => {
-                                    if (src, dest) == MacData::from_slice(&buffer).get_mac() {
-                                        SendState::Idle
-                                    } else {
-                                        SendState::WaitAck(buffer, time - data.len())
-                                    }
-                                }
-                                Err(TryRecvError::Empty) => {
-                                    SendState::WaitAck(buffer, time - data.len())
-                                }
-                                Err(err) => panic!(err),
-                            }
-                        } else if channel_free {
-                            message_signal(buffer)
-                        } else {
-                            SendState::BackOff(buffer, BACK_OFF_WINDOW)
-                        };
-                    }
-                }
+                let mut ack_recv = ack_recv_receiver.try_iter().collect::<Vec<_>>();
 
                 for sample in data.iter_mut() {
-                    *sample = Sample::from(&send_state.next().unwrap());
+                    let mut value = 0;
+
+                    // let channel_free = guard.load(Ordering::SeqCst);
+
+                    match send_state {
+                        SendState::Idle(time) => {
+                            send_state = if time == 0 {
+                                // if channel_free {
+                                match ack_send_receiver.try_recv() {
+                                    Ok(dest) => {
+                                        message_signal(mac_layer.create_ack(dest))
+                                    }
+                                    Err(TryRecvError::Empty) => {
+                                        match receiver.try_recv() {
+                                            Ok(buffer) => message_signal(buffer),
+                                            Err(TryRecvError::Empty) => {
+                                                SendState::Idle(IDLE_SECTION)
+                                            }
+                                            Err(err) => panic!(err),
+                                        }
+                                    }
+                                    Err(err) => panic!(err),
+                                }
+                                // } else {
+                                //     SendState::Idle(0)
+                                // }
+                            } else {
+                                SendState::Idle(time - 1)
+                            }
+                        }
+                        SendState::Sending(buffer, ref mut iter) => {
+                            // if channel_free {
+                            if let Some(item) = iter.next() {
+                                value = item;
+                            } else {
+                                let mac_data = MacData::copy_from_slice(&buffer);
+
+                                send_state = if mac_data.get_dest() != MacData::BROADCAST_MAC &&
+                                    mac_data.get_op() != MacData::ACK {
+                                    SendState::WaitAck(buffer, ACK_TIMEOUT)
+                                } else {
+                                    SendState::Idle(0)
+                                }
+                            }
+                            // } else {
+                            //     send_state = SendState::BackOff(buffer, BACK_OFF_WINDOW);
+                            // }
+                        }
+                        // SendState::BackOff(buffer, time) => {
+                        //     send_state = if data.len() < time {
+                        //         SendState::BackOff(buffer, time - data.len())
+                        //     } else {
+                        //         if channel_free {
+                        //             message_signal(buffer)
+                        //         } else {
+                        //             SendState::BackOff(buffer, BACK_OFF_WINDOW)
+                        //         }
+                        //     };
+                        // }
+                        SendState::WaitAck(buffer, time) => {
+                            send_state = if time > 0 {
+                                if ack_recv.is_empty() {
+                                    SendState::WaitAck(buffer, time - 1)
+                                } else {
+                                    let dest = MacData::copy_from_slice(&buffer).get_dest();
+
+                                    let result = ack_recv.iter()
+                                        .any(|item| *item == dest);
+
+                                    ack_recv.clear();
+
+                                    if result {
+                                        SendState::Idle(0)
+                                    } else {
+                                        SendState::WaitAck(buffer, time - 1)
+                                    }
+                                }
+                            } else {
+                                // if channel_free {
+                                message_signal(buffer)
+                                // } else {
+                                //     SendState::BackOff(buffer, BACK_OFF_WINDOW)
+                                // }
+                            };
+                        }
+                    }
+
+                    *sample = Sample::from(&value);
                 }
             },
             |err| {
@@ -171,10 +200,11 @@ impl Athernet {
     }
 
     fn create_receive_stream(
+        mac_layer: MacLayer,
         device: Device,
-        guard: Arc<AtomicBool>,
-        ack_send_sender: Sender<(u8, u8)>,
-        ack_rcev_sender: Sender<(u8, u8)>,
+        _guard: Arc<AtomicBool>,
+        ack_send_sender: Sender<u8>,
+        ack_recv_sender: Sender<u8>,
     ) -> Result<(Receiver<DataPack>, cpal::Stream), Box<dyn std::error::Error>> {
         let config = select_config(device.supported_input_configs()?)?;
 
@@ -185,7 +215,7 @@ impl Athernet {
         let (sender, receiver) = mpsc::channel();
 
         let mut channel = 0;
-        let mut channel_free = false;
+        // let mut channel_free = false;
 
         let stream = device.build_input_stream(
             &config.into(),
@@ -193,26 +223,24 @@ impl Athernet {
                 for sample in data.iter() {
                     if channel == 0 {
                         if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
-
-
-                            let mac_data = MacData::from_slice(&buffer);
+                            let mac_data = MacData::copy_from_slice(&buffer);
 
                             match mac_data.get_op() {
                                 MacData::ACK => {
-                                    ack_rcev_sender.send(mac_data.get_mac()).unwrap();
+                                    ack_recv_sender.send(mac_data.get_src()).unwrap();
                                 }
                                 MacData::DATA => {
                                     sender.send(buffer).unwrap();
-                                    ack_send_sender.send(mac_data.get_mac()).unwrap();
+                                    ack_send_sender.send(mac_data.get_src()).unwrap();
                                 }
                                 _ => {}
                             }
                         }
 
-                        if channel_free == demodulator.active() {
-                            channel_free = !demodulator.active();
-                            guard.store(channel_free, Ordering::SeqCst);
-                        }
+                        // if channel_free == demodulator.active() {
+                        //     channel_free = !demodulator.active();
+                        //     guard.store(channel_free, Ordering::SeqCst);
+                        // }
                     }
 
                     channel += 1;
@@ -228,19 +256,19 @@ impl Athernet {
         Ok((receiver, stream))
     }
 
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(mac_layer: MacLayer) -> Result<Self, Box<dyn std::error::Error>> {
         let guard = Arc::new(AtomicBool::new(false));
         let host = select_host();
 
-        let (ack_send_sender, ack_send_receiver) = mpsc::channel::<(u8, u8)>();
-        let (ack_recv_sender, ack_recv_receiver) = mpsc::channel::<(u8, u8)>();
+        let (ack_send_sender, ack_send_receiver) = mpsc::channel::<u8>();
+        let (ack_recv_sender, ack_recv_receiver) = mpsc::channel::<u8>();
 
         let (receiver, _output_stream) = Self::create_receive_stream(
-            host.default_input_device().ok_or("no input device available!")?,
+            mac_layer.clone(), host.default_input_device().ok_or("no input device available!")?,
             guard.clone(), ack_send_sender, ack_recv_sender,
         )?;
         let (sender, _input_stream) = Self::create_send_stream(
-            host.default_output_device().ok_or("no output device available!")?,
+            mac_layer, host.default_output_device().ok_or("no output device available!")?,
             guard.clone(), ack_send_receiver, ack_recv_receiver,
         )?;
 

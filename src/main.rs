@@ -10,9 +10,10 @@ extern crate lazy_static;
 use std::{env, fs::File, io::{Read, Write}};
 use crate::{
     acoustic::Athernet,
-    mac::{CRC_SIZE, BODY_INDEX, BODY_MAX_SIZE, SIZE_INDEX, crc_generate, crc_unwrap},
+    mac::{CRC_SIZE, BODY_INDEX, BODY_MAX_SIZE, SIZE_INDEX},
     bit_iter::{BitToByteIter, ByteToBitIter},
 };
+use crate::mac::{MacLayer, MacData};
 
 
 const DATA_PACK_SIZE: usize = 128;
@@ -28,38 +29,37 @@ const BYTE_NUM: usize = (FILE_SIZE + 7) / 8;
 pub struct FileRead<T> {
     iter: T,
     count: u8,
+    dest: u8,
+    mac_layer: MacLayer,
 }
 
 impl<T> FileRead<T> {
-    pub fn new(iter: T) -> Self { Self { iter, count: 0 } }
+    pub fn new(iter: T, dest: u8, mac_layer: MacLayer) -> Self { Self { iter, count: 0, dest, mac_layer } }
 }
 
 impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
     type Item = DataPack;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut ret = [0; DATA_PACK_SIZE];
+        let mut ret = [0; PAYLOAD_SIZE];
 
-        ret[BODY_INDEX] = self.count;
+        ret[0] = self.count;
 
         self.count += 1;
 
-        let mut size = DATA_PACK_SIZE;
+        let mut size = PAYLOAD_SIZE;
 
-        for i in 0..PAYLOAD_SIZE {
+        for (index, item) in ret[1..].iter_mut().enumerate() {
             if let Some(byte) = self.iter.next() {
-                ret[i + 1 + BODY_INDEX] = byte;
+                *item = byte;
             } else {
-                if i == 0 { return None; }
-                size = i + 1 + BODY_INDEX + CRC_SIZE;
+                if index == 0 { return None; }
+                size = index + 1;
                 break;
             }
         }
 
-        ret[SIZE_INDEX] = size as u8;
-        crc_generate(&mut ret);
-
-        Some(ret)
+        Some(self.mac_layer.wrap(self.dest, MacData::DATA, &ret[..size]))
     }
 }
 
@@ -101,7 +101,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let athernet = Athernet::new()?;
+    let mac_layer = MacLayer::new(0b101010);
+
+    let athernet = Athernet::new(mac_layer.clone())?;
 
     for command in commands {
         match command {
@@ -120,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }));
 
-                    for data_pack in FileRead::new(iter) {
+                    for data_pack in FileRead::new(iter, 0b010101, mac_layer.clone()) {
                         athernet.send(&data_pack)?;
                     }
 
@@ -138,38 +140,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut all_data = [0u8; BYTE_NUM];
                 let mut count = 0;
 
-                loop {
-                    if let Some(data) = crc_unwrap(&athernet.recv()?) {
-                        let num = data[0] as usize;
+                while count < PACK_NUM {
+                    let data = athernet.recv()?;
 
-                        if !flag[num] {
-                            flag[num] = true;
+                    let size = data[SIZE_INDEX] as usize;
+                    let num = data[0] as usize;
 
-                            let point = num * PAYLOAD_SIZE;
+                    if !flag[num] {
+                        flag[num] = true;
 
-                            all_data[point..point + data.len() - CRC_SIZE]
-                                .copy_from_slice(&data[1..]);
+                        let point = num * PAYLOAD_SIZE;
 
-                            count += 1;
+                        all_data[point..point + data.len() - CRC_SIZE]
+                            .copy_from_slice(&data[1..]);
 
-                            println!("receive {}", num);
+                        count += 1;
 
-                            if count == PACK_NUM {
-                                let data = ByteToBitIter::from(all_data.iter().cloned())
-                                    .take(FILE_SIZE)
-                                    .map(|bit| if bit { '1' } else { '0' } as u8)
-                                    .collect::<Box<_>>();
-
-                                assert_eq!(data.len(), FILE_SIZE);
-
-                                File::create(file)?.write_all(&data).unwrap();
-                                break;
-                            }
-                        }
-                    } else {
-                        println!("crc fail!");
+                        println!("receive {}", num);
                     }
                 }
+
+                let data = ByteToBitIter::from(all_data.iter().cloned())
+                    .take(FILE_SIZE).map(|bit| if bit { '1' } else { '0' } as u8)
+                    .collect::<Box<_>>();
+
+                assert_eq!(data.len(), FILE_SIZE);
+
+                File::create(file)?.write_all(&data).unwrap();
             }
         }
     }

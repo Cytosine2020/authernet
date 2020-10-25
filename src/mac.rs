@@ -43,24 +43,6 @@ fn crc_calculate(data: &[u8]) -> u8 {
     crc
 }
 
-#[inline]
-pub fn crc_generate(data: &mut DataPack) {
-    let size = data[SIZE_INDEX] as usize;
-
-    data[size - CRC_SIZE] = crc_calculate(&data[..size - CRC_SIZE]);
-}
-
-#[inline]
-pub fn crc_unwrap(data: &DataPack) -> Option<&[u8]> {
-    let size = data[SIZE_INDEX] as usize;
-
-    if size > 1 && crc_calculate(&data[..size - CRC_SIZE]) == data[size - CRC_SIZE] {
-        Some(&data[BODY_INDEX..size - CRC_SIZE])
-    } else {
-        None
-    }
-}
-
 pub struct MacData {
     inner: u16,
 }
@@ -74,21 +56,28 @@ impl MacData {
     const DEST_OFFSET: u16 = Self::OP_OFFSET + Self::OP_SIZE as u16;
     const SRC_OFFSET: u16 = Self::DEST_OFFSET + Self::MAC_SIZE as u16;
 
+    pub const BROADCAST_MAC: u8 = 0b111111;
+
     pub const DATA: u8 = 0b0000;
     pub const ACK: u8 = 0b1111;
 
     #[inline]
-    pub fn from_slice(data_: &DataPack) -> Self {
+    pub fn copy_from_slice(data_: &DataPack) -> Self {
         let mut data = [0u8; 2];
         data.copy_from_slice(&data_[MAC_INDEX..MAC_INDEX + MAC_SIZE]);
         Self { inner: u16::from_le_bytes(data) }
     }
 
     #[inline]
-    pub fn new(op: u8, dest: u8, src: u8) -> Self {
-        let inner = (((op & Self::OP_MASK) as u16) << Self::OP_OFFSET )|
+    pub fn copy_to_slice(&self, data_pack: &mut DataPack) {
+        data_pack[MAC_INDEX..MAC_INDEX + MAC_SIZE].copy_from_slice(&self.inner.to_le_bytes());
+    }
+
+    #[inline]
+    pub fn new(src: u8, dest: u8, op: u8) -> Self {
+        let inner = (((op & Self::OP_MASK) as u16) << Self::OP_OFFSET) |
             (((dest & Self::MAC_MASK) as u16) << Self::DEST_OFFSET) |
-            (((src & Self::MAC_MASK) as u16)  << Self::SRC_OFFSET) ;
+            (((src & Self::MAC_MASK) as u16) << Self::SRC_OFFSET);
         Self { inner }
     }
 
@@ -103,4 +92,46 @@ impl MacData {
 
     #[inline]
     pub fn get_mac(&self) -> (u8, u8) { (self.get_src(), self.get_dest()) }
+}
+
+#[derive(Clone)]
+pub struct MacLayer {
+    mac_addr: u8,
+}
+
+impl MacLayer {
+    #[inline]
+    pub fn new(mac_addr: u8) -> Self { Self { mac_addr } }
+
+    pub fn wrap(&self, dest: u8, op: u8, data: &[u8]) -> DataPack {
+        let mut result: DataPack = [0; DATA_PACK_SIZE];
+
+        MacData::new(self.mac_addr, dest, op).copy_to_slice(&mut result);
+
+        let size = BODY_INDEX + data.len();
+
+        result[SIZE_INDEX] = size as u8;
+        result[BODY_INDEX..size].copy_from_slice(data);
+        result[size] = crc_calculate(&data[..size]);
+
+        result
+    }
+
+    pub fn create_ack(&self, dest: u8) -> DataPack {
+        self.wrap(dest, MacData::ACK, &[])
+    }
+
+    pub fn unwrap<'a>(&self, data: &'a DataPack) -> Option<(MacData, &'a [u8])> {
+        let size = data[SIZE_INDEX] as usize;
+        let mac_data = MacData::copy_from_slice(&data);
+
+        if size > 1 && crc_calculate(&data[..size]) == 0 &&
+            mac_data.get_src() != self.mac_addr &&
+            (mac_data.get_dest() == self.mac_addr ||
+                mac_data.get_dest() == MacData::BROADCAST_MAC) {
+            Some((mac_data, &data[BODY_INDEX..size - CRC_SIZE]))
+        } else {
+            None
+        }
+    }
 }
