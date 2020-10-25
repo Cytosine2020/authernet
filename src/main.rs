@@ -10,10 +10,9 @@ extern crate lazy_static;
 use std::{env, fs::File, io::{Read, Write}};
 use crate::{
     acoustic::Athernet,
-    mac::{CRC_SIZE, BODY_INDEX, BODY_MAX_SIZE, SIZE_INDEX},
+    mac::{BODY_MAX_SIZE, MacLayer, MacData, mac_unwrap},
     bit_iter::{BitToByteIter, ByteToBitIter},
 };
-use crate::mac::{MacLayer, MacData};
 
 
 const DATA_PACK_SIZE: usize = 128;
@@ -141,9 +140,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut count = 0;
 
                 while count < PACK_NUM {
-                    let data = athernet.recv()?;
+                    let pack = athernet.recv()?;
+                    let (_, data) = mac_unwrap(&pack);
 
-                    let size = data[SIZE_INDEX] as usize;
                     let num = data[0] as usize;
 
                     if !flag[num] {
@@ -151,8 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let point = num * PAYLOAD_SIZE;
 
-                        all_data[point..point + data.len() - CRC_SIZE]
-                            .copy_from_slice(&data[1..]);
+                        all_data[point..point + data.len()].copy_from_slice(data);
 
                         count += 1;
 

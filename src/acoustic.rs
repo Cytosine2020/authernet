@@ -15,7 +15,7 @@ use crate::{
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const ACK_TIMEOUT: usize = 256;
-const BACK_OFF_WINDOW: usize = 256;
+// const BACK_OFF_WINDOW: usize = 256;
 const IDLE_SECTION: usize = 256;
 
 
@@ -223,17 +223,19 @@ impl Athernet {
                 for sample in data.iter() {
                     if channel == 0 {
                         if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
-                            let mac_data = MacData::copy_from_slice(&buffer);
+                            if mac_layer.check(&buffer) {
+                                let mac_data = MacData::copy_from_slice(&buffer);
 
-                            match mac_data.get_op() {
-                                MacData::ACK => {
-                                    ack_recv_sender.send(mac_data.get_src()).unwrap();
+                                match mac_data.get_op() {
+                                    MacData::ACK => {
+                                        ack_recv_sender.send(mac_data.get_src()).unwrap();
+                                    }
+                                    MacData::DATA => {
+                                        sender.send(buffer).unwrap();
+                                        ack_send_sender.send(mac_data.get_src()).unwrap();
+                                    }
+                                    _ => {}
                                 }
-                                MacData::DATA => {
-                                    sender.send(buffer).unwrap();
-                                    ack_send_sender.send(mac_data.get_src()).unwrap();
-                                }
-                                _ => {}
                             }
                         }
 

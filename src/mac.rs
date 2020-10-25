@@ -121,17 +121,19 @@ impl MacLayer {
         self.wrap(dest, MacData::ACK, &[])
     }
 
-    pub fn unwrap<'a>(&self, data: &'a DataPack) -> Option<(MacData, &'a [u8])> {
+    pub fn check(&self, data: &DataPack) -> bool {
         let size = data[SIZE_INDEX] as usize;
         let mac_data = MacData::copy_from_slice(&data);
 
-        if size > 1 && crc_calculate(&data[..size]) == 0 &&
+        size > 1 && crc_calculate(&data[..size]) == 0 &&
             mac_data.get_src() != self.mac_addr &&
             (mac_data.get_dest() == self.mac_addr ||
-                mac_data.get_dest() == MacData::BROADCAST_MAC) {
-            Some((mac_data, &data[BODY_INDEX..size - CRC_SIZE]))
-        } else {
-            None
-        }
+                mac_data.get_dest() == MacData::BROADCAST_MAC)
     }
+}
+
+pub fn mac_unwrap(data: &DataPack) -> (MacData, &[u8]) {
+    let size = data[SIZE_INDEX] as usize;
+    let mac_data = MacData::copy_from_slice(&data);
+    (mac_data, &data[BODY_INDEX..size - CRC_SIZE])
 }
