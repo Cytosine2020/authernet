@@ -14,7 +14,7 @@ use crate::{
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const ACK_TIMEOUT: usize = 16384;
+const ACK_TIMEOUT: usize = 10000;
 // const BACK_OFF_WINDOW: usize = 256;
 const IDLE_SECTION: usize = 256;
 

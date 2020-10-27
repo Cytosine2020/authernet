@@ -96,7 +96,7 @@ impl BitReceive {
     pub fn new() -> Self { Self { inner: [0; DATA_PACK_SIZE], count: 0 } }
 
     #[inline]
-    pub fn push(&mut self, bit: bool) -> Option<Result<DataPack, ()>> {
+    pub fn push(&mut self, bit: bool) -> Option<Option<DataPack>> {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
 
@@ -104,11 +104,11 @@ impl BitReceive {
             None
         } else {
             if self.inner[SIZE_INDEX] as usize > DATA_PACK_SIZE {
-                Some(Err(()))
+                Some(None)
             } else if self.count < self.inner[SIZE_INDEX] as usize * 8 {
                 None
             } else {
-                Some(Ok(self.inner))
+                Some(Some(self.inner))
             }
         }
     }
@@ -124,11 +124,11 @@ pub struct Demodulator {
     state: DemodulateState,
     last_prod: i64,
     moving_average: i64,
+    eye_diagram: [usize; 256 * 2 * SECTION_LEN],
 }
 
 impl Demodulator {
     const PREAMBLE_LEN: usize = SECTION_LEN * BARKER.len();
-    const WINDOW_LEN: usize = Self::PREAMBLE_LEN + SECTION_LEN;
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 20;
     const MOVING_AVERAGE: i64 = 32;
     const ACTIVE_THRESHOLD: i64 = 128;
@@ -156,15 +156,16 @@ impl Demodulator {
 
     pub fn new() -> Self {
         Self {
-            window: VecDeque::with_capacity(Self::WINDOW_LEN),
+            window: VecDeque::with_capacity(Self::PREAMBLE_LEN),
             state: DemodulateState::WAITE,
             last_prod: 0,
             moving_average: 0,
+            eye_diagram: [0; 256 * 2 * SECTION_LEN],
         }
     }
 
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
-        if self.window.len() == Self::WINDOW_LEN {
+        if self.window.len() == Self::PREAMBLE_LEN {
             self.window.pop_front();
         }
 
@@ -184,13 +185,13 @@ impl Demodulator {
                     if prod > threshold &&
                         self.last_prod > prod && BARKER.len() <= BARKER.iter()
                         .enumerate().map(|(index, bit)| {
-                        let shift = self.window.len() - Self::PREAMBLE_LEN - 1;
+                        let shift = self.window.len() - Self::PREAMBLE_LEN;
 
                         let prod = self.section_product(shift + index * SECTION_LEN);
 
                         if *bit == (prod > 0) { 1 } else { 0 }
                     }).sum::<usize>() {
-                        self.state = DemodulateState::RECEIVE(1, BitReceive::new());
+                        self.state = DemodulateState::RECEIVE(0, BitReceive::new());
                         prod = 0;
                     }
                 }
@@ -199,16 +200,20 @@ impl Demodulator {
                 count += 1;
 
                 self.state = if count == SECTION_LEN {
-                    let prod = self.section_product(self.window.len() - count);
+                    let prod = self.section_product(self.window.len() - SECTION_LEN);
+
+                    for (index, item) in self.window.iter()
+                        .skip(self.window.len() - SECTION_LEN).enumerate() {
+                        let offset = (*item / 256) as usize + 128;
+
+                        self.eye_diagram[index * 256 + offset] += 1;
+                        self.eye_diagram[(index + SECTION_LEN) * 256 + offset] += 1;
+                    }
 
                     if let Some(result) = buffer.push(prod > 0) {
                         self.state = DemodulateState::WAITE;
-                        self.window.drain(SECTION_LEN..);
-
-                        return match result {
-                            Ok(data) => Some(data),
-                            Err(_) => None,
-                        };
+                        self.window.clear();
+                        return result;
                     }
 
                     DemodulateState::RECEIVE(0, buffer)
@@ -225,3 +230,14 @@ impl Demodulator {
         None
     }
 }
+
+// impl Drop for Demodulator {
+//     fn drop(&mut self) {
+//         for j in 0..256 {
+//             for i in 0..SECTION_LEN * 2 {
+//                 eprint!("{}\t", self.eye_diagram[i * 256 + j]);
+//             }
+//             eprintln!();
+//         }
+//     }
+// }
