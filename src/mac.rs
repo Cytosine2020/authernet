@@ -6,7 +6,9 @@ pub const SIZE_INDEX: usize = 0;
 pub const SIZE_SIZE: usize = 1;
 pub const MAC_INDEX: usize = SIZE_INDEX + SIZE_SIZE;
 pub const MAC_SIZE: usize = 2;
-pub const BODY_INDEX: usize = MAC_INDEX + MAC_SIZE;
+pub const INDEX_INDEX: usize = MAC_INDEX + MAC_SIZE;
+pub const INDEX_SIZE: usize = 1;
+pub const BODY_INDEX: usize = INDEX_INDEX + INDEX_SIZE;
 pub const BODY_MAX_SIZE: usize = DATA_PACK_SIZE - BODY_INDEX - CRC_SIZE;
 pub const CRC_SIZE: usize = 1;
 
@@ -48,13 +50,13 @@ pub struct MacData {
 }
 
 impl MacData {
-    const MAC_SIZE: u8 = 6;
-    const OP_SIZE: u8 = 4;
+    pub const MAC_SIZE: u8 = 6;
+    pub const OP_SIZE: u8 = 4;
     pub const MAC_MASK: u8 = (1 << Self::MAC_SIZE) - 1;
     pub const OP_MASK: u8 = (1 << Self::OP_SIZE) - 1;
-    const OP_OFFSET: u16 = 0;
-    const DEST_OFFSET: u16 = Self::OP_OFFSET + Self::OP_SIZE as u16;
-    const SRC_OFFSET: u16 = Self::DEST_OFFSET + Self::MAC_SIZE as u16;
+    pub const OP_OFFSET: u16 = 0;
+    pub const DEST_OFFSET: u16 = Self::OP_OFFSET + Self::OP_SIZE as u16;
+    pub const SRC_OFFSET: u16 = Self::DEST_OFFSET + Self::MAC_SIZE as u16;
 
     pub const BROADCAST_MAC: u8 = 0b111111;
 
@@ -112,7 +114,6 @@ impl MacLayer {
 
         result[SIZE_INDEX] = size as u8 + 1;
         result[BODY_INDEX..size].copy_from_slice(data);
-        result[size] = crc_calculate(&result[..size]);
 
         result
     }
@@ -130,6 +131,12 @@ impl MacLayer {
             (mac_data.get_dest() == self.mac_addr ||
                 mac_data.get_dest() == MacData::BROADCAST_MAC)
     }
+}
+
+pub fn mac_wrap(data: &mut DataPack, index: u8) {
+    data[INDEX_INDEX] = index;
+    let size = data[SIZE_INDEX] as usize - 1;
+    data[size] = crc_calculate(&data[..size]);
 }
 
 pub fn mac_unwrap(data: &DataPack) -> (MacData, &[u8]) {
