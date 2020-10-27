@@ -1,10 +1,27 @@
 use std::collections::VecDeque;
 use crate::{
-    DATA_PACK_SIZE, DataPack,
-    carrier::{SECTION_LEN, CHANNEL, Synthesizer, carrier},
-    bit_iter::ByteToBitIter,
+    SECTION_LEN, DATA_PACK_SIZE, DataPack,
     mac::{SIZE_INDEX, SIZE_SIZE},
 };
+use lazy_static;
+
+
+lazy_static!(
+    static ref CARRIER: [i16; SECTION_LEN] = {
+        let mut wave = [0i16; SECTION_LEN];
+
+        for i in 0..SECTION_LEN {
+            let t = i as f32 * 2. * std::f32::consts::PI / SECTION_LEN as f32;
+            wave[i] = (t.sin() * std::i16::MAX as f32) as i16;
+        }
+
+        wave
+    };
+);
+
+pub fn carrier() -> impl Iterator<Item=i16> + 'static {
+    CARRIER.iter().cloned()
+}
 
 
 const BARKER: [bool; 11] = [
@@ -12,25 +29,10 @@ const BARKER: [bool; 11] = [
     true, false, false, true, false
 ];
 
-const PREAMBLE_CHANNEL: usize = 0;
 
-
-fn bpsk_modulate<I: Iterator<Item=bool>>(iter: I, channel: usize) -> impl Iterator<Item=i16> {
+fn bpsk_modulate<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
     iter.map(move |bit| {
-        carrier(channel).map(move |item| if bit { item } else { -item })
-    }).flatten()
-}
-
-fn ofdm_modulate<I: Iterator<Item=bool>>(mut iter: I) -> impl Iterator<Item=i16> {
-    let (min, max) = iter.size_hint();
-    assert_eq!(min, max.unwrap());
-    let size = (max.unwrap() + CHANNEL - 1) / CHANNEL;
-
-    (0..size).map(move |_| {
-        Synthesizer::new((0..CHANNEL).map(|f| {
-            let bit = iter.next().unwrap_or(false);
-            carrier(f).map(move |item| if bit { item } else { -item })
-        }))
+        carrier().map(move |item| if bit { item } else { -item })
     }).flatten()
 }
 
@@ -40,15 +42,50 @@ impl Modulator {
     pub fn new() -> Self { Self {} }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        let preamble = BARKER.iter().cloned();
-
-        let iter = ByteToBitIter::from(
-            (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
-        );
-
-        bpsk_modulate(preamble, PREAMBLE_CHANNEL).chain(ofdm_modulate(iter))
+        bpsk_modulate(BARKER.iter().cloned()
+            .chain(ByteToBitIter::from(
+                (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
+            )))
     }
 }
+
+pub struct ByteToBitIter<T> {
+    iter: T,
+    buffer: u8,
+    index: u8,
+}
+
+impl<T> From<T> for ByteToBitIter<T> {
+    fn from(iter: T) -> Self { Self { iter, buffer: 0, index: 8 } }
+}
+
+impl<T: Iterator<Item=u8>> Iterator for ByteToBitIter<T> {
+    type Item = bool;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == 8 {
+            if let Some(byte) = self.iter.next() {
+                self.index = 0;
+                self.buffer = byte;
+            } else {
+                return None;
+            }
+        };
+
+        let index = self.index;
+        self.index += 1;
+        Some(((self.buffer >> index) & 1) == 1)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (min, max) = self.iter.size_hint();
+        let extra = 8 - self.index as usize;
+        (min * 8 + extra, max.map(|value| value * 8 + extra))
+    }
+}
+
 
 #[derive(Copy, Clone)]
 pub struct BitReceive {
@@ -105,12 +142,12 @@ impl Demodulator {
     fn preamble_product(&self) -> i64 {
         Self::dot_product(
             self.window.iter().skip(self.window.len() - Self::PREAMBLE_LEN).cloned(),
-            bpsk_modulate(BARKER.iter().cloned(), PREAMBLE_CHANNEL),
+            bpsk_modulate(BARKER.iter().cloned()),
         )
     }
 
-    fn section_product(&self, offset: usize, channel: usize) -> i64 {
-        Self::dot_product(self.window.iter().skip(offset).cloned(), carrier(channel))
+    fn section_product(&self, offset: usize) -> i64 {
+        Self::dot_product(self.window.iter().skip(offset).cloned(), carrier())
     }
 
     fn moving_average(last: i64, new: i64) -> i64 {
@@ -150,37 +187,32 @@ impl Demodulator {
         match self.state {
             DemodulateState::WAITE => {
                 if prod > threshold && self.last_prod > prod && BARKER.len() <= BARKER.iter()
-                        .enumerate().map(|(index, bit)| {
-                        let shift = self.window.len() - Self::PREAMBLE_LEN;
+                    .enumerate().map(|(index, bit)| {
+                    let shift = self.window.len() - Self::PREAMBLE_LEN;
 
-                        let prod = self.section_product(
-                            shift + index * SECTION_LEN,
-                            PREAMBLE_CHANNEL,
-                        );
+                    let prod = self.section_product(shift + index * SECTION_LEN);
 
-                        if *bit == (prod > 0) { 1 } else { 0 }
-                    }).sum::<usize>() {
+                    if *bit == (prod > 0) { 1 } else { 0 }
+                }).sum::<usize>() {
                     self.state = DemodulateState::RECEIVE(0, BitReceive::new());
-                //     self.last_prod = 0;
-                // } else {
-                //     self.last_prod = prod;
+                    //     self.last_prod = 0;
+                    // } else {
+                    //     self.last_prod = prod;
                 }
             }
             DemodulateState::RECEIVE(mut count, mut buffer) => {
                 count += 1;
 
                 self.state = if count == SECTION_LEN {
-                    for i in 0..CHANNEL {
-                        let prod = self.section_product(self.window.len() - count, i);
+                    let prod = self.section_product(self.window.len() - count);
 
-                        if let Some(result) = buffer.push(prod > 0) {
-                            self.state = DemodulateState::WAITE;
+                    if let Some(result) = buffer.push(prod > 0) {
+                        self.state = DemodulateState::WAITE;
 
-                            return match result {
-                                Ok(data) => Some(data),
-                                Err(_) => None,
-                            };
-                        }
+                        return match result {
+                            Ok(data) => Some(data),
+                            Err(_) => None,
+                        };
                     }
 
                     DemodulateState::RECEIVE(0, buffer)
@@ -192,7 +224,7 @@ impl Demodulator {
 
         self.last_prod = prod;
 
-        eprintln!("{}\t{}", threshold, self.last_prod);
+        // eprintln!("{}\t{}", threshold, self.last_prod);
 
         None
     }

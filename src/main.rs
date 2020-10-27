@@ -1,5 +1,3 @@
-pub mod carrier;
-pub mod bit_iter;
 pub mod acoustic;
 pub mod module;
 pub mod mac;
@@ -14,6 +12,7 @@ use crate::{
 };
 
 
+pub const SECTION_LEN: usize = 6;
 const DATA_PACK_SIZE: usize = 128;
 pub type DataPack = [u8; DATA_PACK_SIZE];
 

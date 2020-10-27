@@ -122,6 +122,9 @@ impl Athernet {
                                                 let dest = MacData::copy_from_slice(&buffer).get_dest();
                                                 let count_ref = &mut count[dest as usize];
                                                 mac_wrap(&mut buffer, *count_ref);
+
+                                                println!("send {:?}", (dest, *count_ref));
+
                                                 if dest != MacData::BROADCAST_MAC {
                                                     *count_ref = count_ref.wrapping_add(1);
                                                 }
@@ -192,6 +195,8 @@ impl Athernet {
                                 }
                             } else {
                                 // if channel_free {
+                                println!("retransmit");
+
                                 message_signal(buffer)
                                 // } else {
                                 //     SendState::BackOff(buffer, BACK_OFF_WINDOW)
@@ -249,6 +254,8 @@ impl Athernet {
                                     }
                                     MacData::DATA => {
                                         if *count_ref == tag.1 {
+                                            println!("receive {:?}", tag);
+
                                             if tag.0 != MacData::BROADCAST_MAC {
                                                 *count_ref = count_ref.wrapping_add(1);
                                             }
@@ -260,6 +267,8 @@ impl Athernet {
                                     }
                                     _ => {}
                                 }
+                            } else {
+                                println!("crc fail");
                             }
                         }
 
