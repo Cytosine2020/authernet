@@ -11,7 +11,7 @@ lazy_static!(
         let mut wave = [0i16; SECTION_LEN];
 
         for i in 0..SECTION_LEN {
-            let t = i as f32 * 2. * std::f32::consts::PI / SECTION_LEN as f32;
+            let t = i as f32 * std::f32::consts::PI / SECTION_LEN as f32;
             wave[i] = (t.sin() * std::i16::MAX as f32) as i16;
         }
 
@@ -130,8 +130,10 @@ pub struct Demodulator {
 
 impl Demodulator {
     const PREAMBLE_LEN: usize = SECTION_LEN * BARKER.len();
+    const WINDOW_LEN: usize = Self::PREAMBLE_LEN + SECTION_LEN;
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 20;
     const MOVING_AVERAGE: i64 = 32;
+    const ACTIVE_THREASHOLD: i64 = 128;
 
     fn dot_product<I, U>(iter_a: I, iter_b: U) -> i64
         where I: Iterator<Item=i16>, U: Iterator<Item=i16>,
@@ -156,23 +158,15 @@ impl Demodulator {
 
     pub fn new() -> Self {
         Self {
-            window: std::iter::repeat(0).take(Self::PREAMBLE_LEN).collect(),
+            window: VecDeque::with_capacity(Self::WINDOW_LEN),
             state: DemodulateState::WAITE,
             last_prod: 0,
             moving_average: 0,
         }
     }
 
-    pub fn active(&self) -> bool {
-        if let DemodulateState::WAITE = self.state {
-            true
-        } else {
-            false
-        }
-    }
-
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
-        if self.window.len() == Self::PREAMBLE_LEN {
+        if self.window.len() == Self::WINDOW_LEN {
             self.window.pop_front();
         }
 
@@ -181,23 +175,26 @@ impl Demodulator {
         self.moving_average = Self::moving_average(self.moving_average, (item as i64).abs());
 
         let threshold = self.moving_average * Self::HEADER_THRESHOLD_SCALE;
-
-        let prod = self.preamble_product();
+        let mut prod = 0;
 
         match self.state {
             DemodulateState::WAITE => {
-                if prod > threshold && self.last_prod > prod && BARKER.len() <= BARKER.iter()
-                    .enumerate().map(|(index, bit)| {
-                    let shift = self.window.len() - Self::PREAMBLE_LEN;
+                if self.window.len() >= Self::PREAMBLE_LEN &&
+                    self.moving_average > Self::ACTIVE_THREASHOLD {
+                    prod = self.preamble_product();
 
-                    let prod = self.section_product(shift + index * SECTION_LEN);
+                    if prod > threshold &&
+                        self.last_prod > prod && BARKER.len() <= BARKER.iter()
+                        .enumerate().map(|(index, bit)| {
+                        let shift = self.window.len() - Self::PREAMBLE_LEN - 1;
 
-                    if *bit == (prod > 0) { 1 } else { 0 }
-                }).sum::<usize>() {
-                    self.state = DemodulateState::RECEIVE(0, BitReceive::new());
-                    //     self.last_prod = 0;
-                    // } else {
-                    //     self.last_prod = prod;
+                        let prod = self.section_product(shift + index * SECTION_LEN);
+
+                        if *bit == (prod > 0) { 1 } else { 0 }
+                    }).sum::<usize>() {
+                        self.state = DemodulateState::RECEIVE(1, BitReceive::new());
+                        prod = 0;
+                    }
                 }
             }
             DemodulateState::RECEIVE(mut count, mut buffer) => {
@@ -208,6 +205,7 @@ impl Demodulator {
 
                     if let Some(result) = buffer.push(prod > 0) {
                         self.state = DemodulateState::WAITE;
+                        self.window.drain(SECTION_LEN..);
 
                         return match result {
                             Ok(data) => Some(data),

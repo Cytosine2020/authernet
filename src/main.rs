@@ -12,7 +12,7 @@ use crate::{
 };
 
 
-pub const SECTION_LEN: usize = 6;
+pub const SECTION_LEN: usize = 5;
 const DATA_PACK_SIZE: usize = 128;
 pub type DataPack = [u8; DATA_PACK_SIZE];
 
@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     athernet.send(&data_pack)?;
                 }
 
-                std::thread::sleep(std::time::Duration::from_secs(20));
+                std::thread::sleep(std::time::Duration::from_secs(100));
             }
             Command::Recv(name) => {
                 let first_pack = athernet.recv()?;
