@@ -50,8 +50,8 @@ pub struct MacData {
 impl MacData {
     const MAC_SIZE: u8 = 6;
     const OP_SIZE: u8 = 4;
-    const MAC_MASK: u8 = (1 << Self::MAC_SIZE) - 1;
-    const OP_MASK: u8 = (1 << Self::OP_SIZE) - 1;
+    pub const MAC_MASK: u8 = (1 << Self::MAC_SIZE) - 1;
+    pub const OP_MASK: u8 = (1 << Self::OP_SIZE) - 1;
     const OP_OFFSET: u16 = 0;
     const DEST_OFFSET: u16 = Self::OP_OFFSET + Self::OP_SIZE as u16;
     const SRC_OFFSET: u16 = Self::DEST_OFFSET + Self::MAC_SIZE as u16;
@@ -110,9 +110,9 @@ impl MacLayer {
 
         let size = BODY_INDEX + data.len();
 
-        result[SIZE_INDEX] = size as u8;
+        result[SIZE_INDEX] = size as u8 + 1;
         result[BODY_INDEX..size].copy_from_slice(data);
-        result[size] = crc_calculate(&data[..size]);
+        result[size] = crc_calculate(&result[..size]);
 
         result
     }

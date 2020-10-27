@@ -14,7 +14,7 @@ use crate::{
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const ACK_TIMEOUT: usize = 256;
+const ACK_TIMEOUT: usize = 16384;
 // const BACK_OFF_WINDOW: usize = 256;
 const IDLE_SECTION: usize = 256;
 
@@ -228,13 +228,19 @@ impl Athernet {
 
                                 match mac_data.get_op() {
                                     MacData::ACK => {
+                                        println!("dest {}, src {}, op ACK", mac_data.get_dest(), mac_data.get_src());
+
                                         ack_recv_sender.send(mac_data.get_src()).unwrap();
                                     }
                                     MacData::DATA => {
+                                        println!("dest {}, src {}, op DATA", mac_data.get_dest(), mac_data.get_src());
+
                                         sender.send(buffer).unwrap();
                                         ack_send_sender.send(mac_data.get_src()).unwrap();
                                     }
-                                    _ => {}
+                                    _ => {
+                                        println!("dest {}, src {}, op UNKNOWN", mac_data.get_dest(), mac_data.get_src());
+                                    }
                                 }
                             }
                         }

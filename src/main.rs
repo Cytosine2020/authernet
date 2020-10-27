@@ -20,8 +20,7 @@ const DATA_PACK_SIZE: usize = 128;
 pub type DataPack = [u8; DATA_PACK_SIZE];
 
 const FILE_SIZE: usize = 10000;
-const PAYLOAD_SIZE: usize = BODY_MAX_SIZE - 1;
-const PACK_NUM: usize = (FILE_SIZE + PAYLOAD_SIZE * 8 - 1) / (PAYLOAD_SIZE * 8);
+const PACK_NUM: usize = (FILE_SIZE + (BODY_MAX_SIZE - 1) * 8 - 1) / ((BODY_MAX_SIZE - 1) * 8);
 const BYTE_NUM: usize = (FILE_SIZE + 7) / 8;
 
 
@@ -33,27 +32,29 @@ pub struct FileRead<T> {
 }
 
 impl<T> FileRead<T> {
-    pub fn new(iter: T, dest: u8, mac_layer: MacLayer) -> Self { Self { iter, count: 0, dest, mac_layer } }
+    pub fn new(iter: T, dest: u8, mac_layer: MacLayer) -> Self {
+        Self { iter, count: 0, dest, mac_layer }
+    }
 }
 
 impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
     type Item = DataPack;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut ret = [0; PAYLOAD_SIZE];
+        let mut ret = [0; BODY_MAX_SIZE];
 
         ret[0] = self.count;
 
         self.count += 1;
 
-        let mut size = PAYLOAD_SIZE;
+        let mut size = BODY_MAX_SIZE;
 
-        for (index, item) in ret[1..].iter_mut().enumerate() {
+        for i in 1..BODY_MAX_SIZE {
             if let Some(byte) = self.iter.next() {
-                *item = byte;
+                ret[i] = byte;
             } else {
-                if index == 0 { return None; }
-                size = index + 1;
+                if i == 1 { return None; }
+                size = i;
                 break;
             }
         }
@@ -73,6 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     args.next();
 
     let mut commands = Vec::new();
+    let mut src_ = Vec::new();
+    let mut dest_ = Vec::new();
 
     loop {
         if let Some(command_) = args.next() {
@@ -86,6 +89,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Some(arg) = args.next() {
                 match command[1] as char {
+                    'c' => src_.push(arg.parse::<u8>()?),
+                    'd' => dest_.push(arg.parse::<u8>()?),
                     's' => commands.push(Command::Send(arg)),
                     'r' => commands.push(Command::Recv(arg)),
                     _ => return Err(String::from(
@@ -100,41 +105,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mac_layer = MacLayer::new(0b101010);
+    if src_.len() != 1 || src_[0] > MacData::MAC_MASK {
+        Err("no src or multiple src or src to big")?
+    }
+
+    if dest_.len() != 1 || dest_[0] > MacData::MAC_MASK {
+        Err("no dest or multiple dest or dest too big")?
+    }
+
+    let src = src_[0];
+    let dest = dest_[0];
+
+    let mac_layer = MacLayer::new(src);
 
     let athernet = Athernet::new(mac_layer.clone())?;
 
     for command in commands {
         match command {
-            Command::Send(file) => {
-                let send_file = |file| -> Result<_, Box<dyn std::error::Error>> {
-                    let file = File::open(file)?;
+            Command::Send(name) => {
+                let file = File::open(name.clone())?;
 
-                    assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
+                assert_eq!(file.metadata()?.len(), FILE_SIZE as u64);
 
-                    let iter = BitToByteIter::from(file.bytes()
-                        .map(|byte| {
-                            match byte.unwrap() as char {
-                                '0' => false,
-                                '1' => true,
-                                _ => panic!(),
-                            }
-                        }));
+                let iter = BitToByteIter::from(file.bytes()
+                    .map(|byte| {
+                        match byte.unwrap() as char {
+                            '0' => false,
+                            '1' => true,
+                            _ => panic!(),
+                        }
+                    }));
 
-                    for data_pack in FileRead::new(iter, 0b010101, mac_layer.clone()) {
-                        athernet.send(&data_pack)?;
-                    }
+                for data_pack in FileRead::new(iter, dest, mac_layer.clone()) {
+                    athernet.send(&data_pack)?;
+                }
 
-                    Ok(())
-                };
-
-                send_file(file.clone())?;
-
-                send_file(file)?;
-
-                std::thread::sleep(std::time::Duration::from_secs(3));
+                std::thread::sleep(std::time::Duration::from_secs(5));
             }
-            Command::Recv(file) => {
+            Command::Recv(name) => {
                 let mut flag = [false; PACK_NUM];
                 let mut all_data = [0u8; BYTE_NUM];
                 let mut count = 0;
@@ -148,9 +156,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if !flag[num] {
                         flag[num] = true;
 
-                        let point = num * PAYLOAD_SIZE;
+                        let point = num * (BODY_MAX_SIZE - 1);
 
-                        all_data[point..point + data.len()].copy_from_slice(data);
+                        all_data[point..point + data.len() - 1].copy_from_slice(&data[1..]);
 
                         count += 1;
 
@@ -164,7 +172,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 assert_eq!(data.len(), FILE_SIZE);
 
-                File::create(file)?.write_all(&data).unwrap();
+                File::create(name)?.write_all(&data).unwrap();
+
+                std::thread::sleep(std::time::Duration::from_secs(1));
             }
         }
     }
