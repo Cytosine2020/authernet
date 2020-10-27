@@ -228,6 +228,7 @@ name = "network"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "lazy_static",
 ]
 
 [[package]]

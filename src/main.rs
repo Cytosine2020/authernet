@@ -1,159 +1,147 @@
-pub mod wave;
-pub mod bit_set;
+pub mod carrier;
+pub mod bit_iter;
 pub mod acoustic;
 pub mod module;
+pub mod mac;
 
-use std::{
-    env, fs::File, cmp::min, mem::size_of,
-    io::{Read, Write, BufWriter, BufReader},
-};
+#[macro_use]
+extern crate lazy_static;
+
+use std::{env, fs::File, io::{Read, BufReader, Write}};
 use crate::{
-    wave::Wave,
-    bit_set::DataPack,
-    acoustic::{AcousticSender, AcousticReceiver},
+    acoustic::Athernet,
+    mac::{BODY_MAX_SIZE, MacLayer, MacData, mac_unwrap},
 };
 
 
-const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const WAVE_LENGTH: usize = 16;
-const SECTION_LEN: usize = 48;
 const DATA_PACK_SIZE: usize = 128;
+pub type DataPack = [u8; DATA_PACK_SIZE];
 
 
-pub fn compare(receiver: &AcousticReceiver, sender: &AcousticSender, i: u8)
-               -> Result<(), Box<dyn std::error::Error>>
-{
-    let send = [i; DATA_PACK_SIZE / 8];
+pub struct FileRead<T> {
+    iter: T,
+    dest: u8,
+    mac_layer: MacLayer,
+}
 
-    sender.send(send)?;
-
-    let recv = receiver.recv()?;
-
-    if !recv.iter().zip(send.iter()).all(|(a, b)| *a == *b) {
-        print!("{:02X} ", i);
-        for byte in recv.iter() {
-            print!("{:02X}", byte);
-        }
-        println!();
-    } else {
-        println!("{:02X}", i);
+impl<T> FileRead<T> {
+    pub fn new(iter: T, dest: u8, mac_layer: MacLayer) -> Self {
+        Self { iter, dest, mac_layer }
     }
+}
 
-    Ok(())
+impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
+    type Item = DataPack;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut ret = [0; BODY_MAX_SIZE];
+        let mut size = BODY_MAX_SIZE;
+
+        for i in 0..BODY_MAX_SIZE {
+            if let Some(byte) = self.iter.next() {
+                ret[i] = byte;
+            } else {
+                if i == 0 { return None; }
+                size = i;
+                break;
+            }
+        }
+
+        Some(self.mac_layer.wrap(self.dest, MacData::DATA, &ret[..size]))
+    }
+}
+
+enum Command {
+    Send(String),
+    Recv(String),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let args = env::args().collect::<Vec<_>>();
-    //
-    // if args.len() != 3 { panic!("accept only two arguments!") }
+    let mut args = env::args();
 
-    // acoustic::print_hosts();
+    args.next();
 
-    let wave = Wave::new(WAVE_LENGTH, std::i16::MAX as usize);
+    let src = args.next().unwrap().parse::<u8>()?;
+    let dest = args.next().unwrap().parse::<u8>()?;
+    let mut commands = Vec::new();
 
-    let receiver = AcousticReceiver::new(&wave)?;
+    loop {
+        if let Some(command_) = args.next() {
+            let command = command_.as_bytes();
 
-    let sender = AcousticSender::new(&wave)?;
+            if command[0] as char != '-' || command.len() != 2 {
+                return Err(String::from(
+                    format!("unknown command: {:?}", command_).to_owned()
+                ).into());
+            }
 
-    for i in 0..=255 {
-        compare(&receiver, &sender, i)?;
+            if let Some(arg) = args.next() {
+                match command[1] as char {
+                    's' => commands.push(Command::Send(arg)),
+                    'r' => commands.push(Command::Recv(arg)),
+                    _ => return Err(String::from(
+                        format!("unknown command: {:?}", command_).to_owned()
+                    ).into()),
+                }
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
     }
 
-    // for i in 0..=255 {
-    //     let buf = receiver.recv()?;
-    //
-    //     if buf != [i; DATA_PACK_SIZE / 8] {
-    //         println!("{} {:?}", i, buf);
-    //     } else {
-    //         println!("{}", i);
-    //     }
-    // }
+    let mac_layer = MacLayer::new(src);
 
-    // for i in 0..=255 {
-    //     sender.send([i; DATA_PACK_SIZE / 8])?;
-    // }
-    //
-    // std::thread::sleep(std::time::Duration::from_secs(45));
+    let athernet = Athernet::new(mac_layer.clone())?;
 
-    // if args[1] == "-s" {
-    //     let sender = AcousticSender::new(&wave, SECTION_LEN)?;
-    //
-    //     let file = File::open(args[2].clone())?;
-    //
-    //     let mut size = file.metadata()?.len() as u64;
-    //
-    //     println!("sending file {:?} with size {}", args[2], size);
-    //
-    //     let mut buf_read = BufReader::new(file);
-    //
-    //     let mut buf: DataPack = [0; DATA_PACK_SIZE / 8];
-    //
-    //     let first_size = min(buf.len() as u64, size + size_of::<u64>() as u64) as usize;
-    //
-    //     buf[..size_of::<i64>()].copy_from_slice(&size.to_le_bytes());
-    //
-    //     buf_read.read_exact(&mut buf[size_of::<u64>()..first_size])?;
-    //
-    //     sender.send(buf)?;
-    //
-    //     size -= (first_size - size_of::<u64>()) as u64;
-    //
-    //     while size > buf.len() as u64 {
-    //         buf_read.read_exact(&mut buf)?;
-    //
-    //         sender.send(buf)?;
-    //
-    //         size -= buf.len() as u64;
-    //     }
-    //
-    //     if size > 0 {
-    //         buf_read.read_exact(&mut buf[..size as usize])?;
-    //
-    //         sender.send(buf)?;
-    //     }
-    //
-    //     std::thread::sleep(std::time::Duration::from_secs(90));
-    // } else if args[1] == "-r" {
-    //     let receiver = AcousticReceiver::new(&wave, SECTION_LEN)?;
-    //
-    //     let file = File::create(args[2].clone())?;
-    //
-    //     let mut buf_writer = BufWriter::new(file);
-    //
-    //     let mut buf = receiver.recv()?;
-    //
-    //     let mut size = u64::from_le_bytes(buf[..size_of::<u64>()].try_into()?);
-    //
-    //     println!("receiving file {:?} with size {}", args[2], size);
-    //
-    //     let first_size = min(buf.len() as u64, size + size_of::<u64>() as u64) as usize;
-    //
-    //     if buf_writer.write(&buf[size_of::<u64>()..first_size])? != first_size - size_of::<u64>() {
-    //         panic!();
-    //     }
-    //
-    //     size -= (first_size - size_of::<u64>()) as u64;
-    //
-    //     while size > buf.len() as u64 {
-    //         buf = receiver.recv()?;
-    //
-    //         if buf_writer.write(&buf)? != buf.len() {
-    //             panic!();
-    //         }
-    //
-    //         size -= buf.len() as u64;
-    //     }
-    //
-    //     if size > 0 {
-    //         buf = receiver.recv()?;
-    //
-    //         if buf_writer.write(&buf[..size as usize])? != size as usize {
-    //             panic!();
-    //         }
-    //     }
-    // } else {
-    //     panic!("unknown command: {}", args[1]);
-    // }
+    for command in commands {
+        match command {
+            Command::Send(name) => {
+                let file = File::open(name.clone())?;
+
+                let size = file.metadata()?.len();
+
+                println!("sending {:?}, size {}", name, size);
+
+                athernet.send(&mac_layer.wrap(dest, MacData::DATA, &size.to_le_bytes()))?;
+
+                let iter = BufReader::new(file)
+                    .bytes().filter_map(|item| item.ok());
+
+                for data_pack in FileRead::new(iter, dest, mac_layer.clone()) {
+                    athernet.send(&data_pack)?;
+                }
+
+                std::thread::sleep(std::time::Duration::from_secs(20));
+            }
+            Command::Recv(name) => {
+                let first_pack = athernet.recv()?;
+                let (_, first_data) = mac_unwrap(&first_pack);
+
+                let mut size_buffer = [0u8; 8];
+                size_buffer.copy_from_slice(first_data);
+
+                let size = u64::from_le_bytes(size_buffer);
+                let mut count = 0;
+
+                println!("receiving {:?}, size {}", name, size);
+
+                let mut file = File::create(name)?;
+
+                while count < size {
+                    let pack = athernet.recv()?;
+                    let (_, data) = mac_unwrap(&pack);
+
+                    file.write_all(data)?;
+
+                    count += data.len() as u64;
+                }
+
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
+    }
 
     Ok(())
 }
