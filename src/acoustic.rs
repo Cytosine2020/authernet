@@ -8,10 +8,9 @@ use cpal::{
 };
 use crate::{
     DataPack,
-    mac::{MacData, MacLayer},
+    mac::{INDEX_INDEX, MacData, MacLayer, mac_wrap},
     module::{Modulator, Demodulator},
 };
-use crate::mac::{INDEX_INDEX, mac_wrap};
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);

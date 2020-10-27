@@ -1,8 +1,5 @@
 use std::collections::VecDeque;
-use crate::{
-    SECTION_LEN, DATA_PACK_SIZE, DataPack,
-    mac::{SIZE_INDEX, SIZE_SIZE},
-};
+use crate::{SECTION_LEN, DATA_PACK_SIZE, DataPack, mac::{SIZE_INDEX, SIZE_SIZE}};
 use lazy_static;
 
 
@@ -29,25 +26,6 @@ const BARKER: [bool; 11] = [
     true, false, false, true, false
 ];
 
-
-fn bpsk_modulate<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
-    iter.map(move |bit| {
-        carrier().map(move |item| if bit { item } else { -item })
-    }).flatten()
-}
-
-pub struct Modulator {}
-
-impl Modulator {
-    pub fn new() -> Self { Self {} }
-
-    pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        bpsk_modulate(BARKER.iter().cloned()
-            .chain(ByteToBitIter::from(
-                (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
-            )))
-    }
-}
 
 pub struct ByteToBitIter<T> {
     iter: T,
@@ -83,6 +61,26 @@ impl<T: Iterator<Item=u8>> Iterator for ByteToBitIter<T> {
         let (min, max) = self.iter.size_hint();
         let extra = 8 - self.index as usize;
         (min * 8 + extra, max.map(|value| value * 8 + extra))
+    }
+}
+
+
+fn bpsk_modulate<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
+    iter.map(move |bit| {
+        carrier().map(move |item| if bit { item } else { -item })
+    }).flatten()
+}
+
+pub struct Modulator {}
+
+impl Modulator {
+    pub fn new() -> Self { Self {} }
+
+    pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
+        bpsk_modulate(BARKER.iter().cloned()
+            .chain(ByteToBitIter::from(
+                (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
+            )))
     }
 }
 
@@ -133,7 +131,7 @@ impl Demodulator {
     const WINDOW_LEN: usize = Self::PREAMBLE_LEN + SECTION_LEN;
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 20;
     const MOVING_AVERAGE: i64 = 32;
-    const ACTIVE_THREASHOLD: i64 = 128;
+    const ACTIVE_THRESHOLD: i64 = 128;
 
     fn dot_product<I, U>(iter_a: I, iter_b: U) -> i64
         where I: Iterator<Item=i16>, U: Iterator<Item=i16>,
@@ -180,7 +178,7 @@ impl Demodulator {
         match self.state {
             DemodulateState::WAITE => {
                 if self.window.len() >= Self::PREAMBLE_LEN &&
-                    self.moving_average > Self::ACTIVE_THREASHOLD {
+                    self.moving_average > Self::ACTIVE_THRESHOLD {
                     prod = self.preamble_product();
 
                     if prod > threshold &&
