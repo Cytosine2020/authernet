@@ -122,7 +122,9 @@ impl Athernet {
                                                 let dest = MacData::copy_from_slice(&buffer).get_dest();
                                                 let count_ref = &mut count[dest as usize];
                                                 mac_wrap(&mut buffer, *count_ref);
-                                                *count_ref = count_ref.wrapping_add(1);
+                                                if dest != MacData::BROADCAST_MAC {
+                                                    *count_ref = count_ref.wrapping_add(1);
+                                                }
                                                 message_signal(buffer)
                                             },
                                             Err(TryRecvError::Empty) => {
@@ -248,7 +250,9 @@ impl Athernet {
                                     }
                                     MacData::DATA => {
                                         if *count_ref == tag.1 {
-                                            *count_ref = count_ref.wrapping_add(1);
+                                            if tag.0 != MacData::BROADCAST_MAC {
+                                                *count_ref = count_ref.wrapping_add(1);
+                                            }
 
                                             sender.send(buffer).unwrap();
                                         }
