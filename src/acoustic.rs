@@ -126,7 +126,7 @@ impl Athernet {
                                                     *count_ref = count_ref.wrapping_add(1);
                                                 }
                                                 message_signal(buffer)
-                                            },
+                                            }
                                             Err(TryRecvError::Empty) => {
                                                 SendState::Idle(IDLE_SECTION)
                                             }
@@ -238,7 +238,6 @@ impl Athernet {
                 for sample in data.iter() {
                     if channel == 0 {
                         if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
-
                             if mac_layer.check(&buffer) {
                                 let mac_data = MacData::copy_from_slice(&buffer);
                                 let tag = (mac_data.get_src(), buffer[INDEX_INDEX]);

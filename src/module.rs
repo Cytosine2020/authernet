@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use crate::{
     DATA_PACK_SIZE, DataPack,
-    carrier::{SECTION_LEN, BASE_F, CHANNEL, Synthesizer, carrier},
+    carrier::{SECTION_LEN, CHANNEL, Synthesizer, carrier},
     bit_iter::ByteToBitIter,
     mac::{SIZE_INDEX, SIZE_SIZE},
 };
@@ -12,8 +12,7 @@ const BARKER: [bool; 11] = [
     true, false, false, true, false
 ];
 
-const PREAMBLE_CHANNEL: usize = 3;
-const PREAMBLE_WAVE_LEN: usize = SECTION_LEN / (BASE_F + PREAMBLE_CHANNEL);
+const PREAMBLE_CHANNEL: usize = 0;
 
 
 fn bpsk_modulate<I: Iterator<Item=bool>>(iter: I, channel: usize) -> impl Iterator<Item=i16> {
@@ -47,9 +46,7 @@ impl Modulator {
             (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
         );
 
-        std::iter::repeat(0).take(SECTION_LEN * 5)
-            .chain(bpsk_modulate(preamble, PREAMBLE_CHANNEL))
-            .chain(ofdm_modulate(iter))
+        bpsk_modulate(preamble, PREAMBLE_CHANNEL).chain(ofdm_modulate(iter))
     }
 }
 
@@ -84,7 +81,6 @@ impl BitReceive {
 
 enum DemodulateState {
     WAITE,
-    MATCH(usize, i64),
     RECEIVE(usize, BitReceive),
 }
 
@@ -97,11 +93,8 @@ pub struct Demodulator {
 
 impl Demodulator {
     const PREAMBLE_LEN: usize = SECTION_LEN * BARKER.len();
-    const WINDOW_EXTRA_SIZE: usize = SECTION_LEN * 5;
-    const WINDOW_CAPACITY: usize = Self::PREAMBLE_LEN + Self::WINDOW_EXTRA_SIZE;
-    const HEADER_THRESHOLD_SCALE: i64 = 1 << 22;
-    const MOVING_AVERAGE: i64 = 512;
-    const ACTIVE_THRESHOLD: i64 = 256;
+    const HEADER_THRESHOLD_SCALE: i64 = 1 << 20;
+    const MOVING_AVERAGE: i64 = 32;
 
     fn dot_product<I, U>(iter_a: I, iter_b: U) -> i64
         where I: Iterator<Item=i16>, U: Iterator<Item=i16>,
@@ -126,25 +119,23 @@ impl Demodulator {
 
     pub fn new() -> Self {
         Self {
-            window: VecDeque::with_capacity(Self::WINDOW_CAPACITY),
+            window: std::iter::repeat(0).take(Self::PREAMBLE_LEN).collect(),
             state: DemodulateState::WAITE,
             last_prod: 0,
             moving_average: 0,
         }
     }
 
-    fn alert(&self) -> bool { self.moving_average > Self::ACTIVE_THRESHOLD }
-
     pub fn active(&self) -> bool {
         if let DemodulateState::WAITE = self.state {
             true
         } else {
-            self.alert()
+            false
         }
     }
 
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
-        if self.window.len() == Self::WINDOW_CAPACITY {
+        if self.window.len() == Self::PREAMBLE_LEN {
             self.window.pop_front();
         }
 
@@ -154,57 +145,25 @@ impl Demodulator {
 
         let threshold = self.moving_average * Self::HEADER_THRESHOLD_SCALE;
 
+        let prod = self.preamble_product();
+
         match self.state {
             DemodulateState::WAITE => {
-                if self.window.len() >= Self::PREAMBLE_LEN && self.alert() {
-                    let prod = self.preamble_product();
+                if prod > threshold && self.last_prod > prod && BARKER.len() <= BARKER.iter()
+                        .enumerate().map(|(index, bit)| {
+                        let shift = self.window.len() - Self::PREAMBLE_LEN;
 
-                    if prod > threshold && self.last_prod > prod {
-                        self.state = DemodulateState::MATCH(1, self.last_prod);
-                    }
+                        let prod = self.section_product(
+                            shift + index * SECTION_LEN,
+                            PREAMBLE_CHANNEL,
+                        );
 
-                    self.last_prod = prod;
-                } else {
-                    self.last_prod = 0;
-                }
-            }
-            DemodulateState::MATCH(mut count, last) => {
-                let prod = self.preamble_product();
-
-                let last_prod = self.last_prod;
-
-                self.last_prod = prod;
-
-                self.state = if count >= PREAMBLE_WAVE_LEN * 2 {
-                    DemodulateState::WAITE
-                } else {
-                    count += 1;
-
-                    if last_prod > prod && count >= PREAMBLE_WAVE_LEN {
-                        if last_prod < last {
-                            if BARKER.len() - 1 <= BARKER.iter()
-                                .enumerate().map(|(index, bit)| {
-                                let shift = self.window.len() - Self::PREAMBLE_LEN - count;
-
-                                let prod = self.section_product(
-                                    shift + index * SECTION_LEN,
-                                    PREAMBLE_CHANNEL,
-                                );
-
-                                if *bit == (prod > 0) { 1 } else { 0 }
-                            }).sum::<usize>() {
-                                self.last_prod = 0;
-
-                                DemodulateState::RECEIVE(count, BitReceive::new())
-                            } else {
-                                DemodulateState::WAITE
-                            }
-                        } else {
-                            DemodulateState::MATCH(1, self.last_prod)
-                        }
-                    } else {
-                        DemodulateState::MATCH(count, last)
-                    }
+                        if *bit == (prod > 0) { 1 } else { 0 }
+                    }).sum::<usize>() {
+                    self.state = DemodulateState::RECEIVE(0, BitReceive::new());
+                //     self.last_prod = 0;
+                // } else {
+                //     self.last_prod = prod;
                 }
             }
             DemodulateState::RECEIVE(mut count, mut buffer) => {
@@ -215,10 +174,6 @@ impl Demodulator {
                         let prod = self.section_product(self.window.len() - count, i);
 
                         if let Some(result) = buffer.push(prod > 0) {
-                            self.state = DemodulateState::WAITE;
-
-                            self.window.drain(..self.window.len() - SECTION_LEN);
-
                             self.state = DemodulateState::WAITE;
 
                             return match result {
@@ -234,6 +189,10 @@ impl Demodulator {
                 }
             }
         }
+
+        self.last_prod = prod;
+
+        eprintln!("{}\t{}", threshold, self.last_prod);
 
         None
     }

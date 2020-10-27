@@ -1,8 +1,8 @@
 use lazy_static;
 
-pub const SECTION_LEN: usize = 48;
+pub const SECTION_LEN: usize = 6;
 pub const BASE_F: usize = 1;
-pub const CHANNEL: usize = 8;
+pub const CHANNEL: usize = 1;
 
 
 lazy_static!(
