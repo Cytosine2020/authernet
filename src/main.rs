@@ -6,7 +6,7 @@ pub mod mac;
 extern crate lazy_static;
 
 use std::{env, fs::File, io::{Read, BufReader, Write}};
-use crate::{acoustic::Athernet, mac::{BODY_MAX_SIZE, MacLayer, MacData, mac_unwrap}, module::CARRIER};
+use crate::{acoustic::Athernet, mac::{BODY_MAX_SIZE, MacLayer, MacData, mac_unwrap}};
 
 
 const DATA_PACK_SIZE: usize = 128;
@@ -54,10 +54,6 @@ enum Command {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args();
-
-    for item in CARRIER.iter() {
-        println!("{}", item);
-    }
 
     args.next();
 

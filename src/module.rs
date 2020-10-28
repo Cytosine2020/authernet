@@ -238,6 +238,7 @@ impl Demodulator {
         self.last_prod = prod;
 
         // eprintln!("{}\t{}", threshold, self.last_prod);
+        eprintln!("{}", item);
 
         None
     }
