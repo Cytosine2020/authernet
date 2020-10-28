@@ -33,10 +33,7 @@ fn carrier() -> impl Iterator<Item=i16> + 'static {
 }
 
 
-const BARKER: [bool; 11] = [
-    true, true, true, false, false, false,
-    true, false, false, true, false
-];
+const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
 pub struct ByteToBitIter<T> {
@@ -141,8 +138,8 @@ pub struct Demodulator {
 
 impl Demodulator {
     const PREAMBLE_LEN: usize = SYMBOL_LEN * BARKER.len();
-    const HEADER_THRESHOLD_SCALE: i64 = 1 << 20;
-    const MOVING_AVERAGE: i64 = 32;
+    const HEADER_THRESHOLD_SCALE: i64 = 1 << 19;
+    const MOVING_AVERAGE: i64 = 16;
     const ACTIVE_THRESHOLD: i64 = 128;
 
     fn dot_product<I, U>(iter_a: I, iter_b: U) -> i64
@@ -219,7 +216,6 @@ impl Demodulator {
                         let offset = (*item / 256) as usize + 128;
 
                         self.eye_diagram[index * 256 + offset] += 1;
-                        self.eye_diagram[(index + SYMBOL_LEN) * 256 + offset] += 1;
                     }
 
                     if let Some(result) = buffer.push(prod > 0) {
@@ -238,7 +234,7 @@ impl Demodulator {
         self.last_prod = prod;
 
         // eprintln!("{}\t{}", threshold, self.last_prod);
-        eprintln!("{}", item);
+        // eprintln!("{}", item);
 
         None
     }
@@ -247,9 +243,18 @@ impl Demodulator {
 // impl Drop for Demodulator {
 //     fn drop(&mut self) {
 //         for j in 0..256 {
-//             for i in 0..SECTION_LEN * 2 {
+//             for i in 0..SYMBOL_LEN {
 //                 eprint!("{}\t", self.eye_diagram[i * 256 + j]);
 //             }
+//
+//             for i in 0..SYMBOL_LEN {
+//                 eprint!("{}\t", self.eye_diagram[i * 256 + j]);
+//             }
+//
+//             for i in 0..SYMBOL_LEN {
+//                 eprint!("{}\t", self.eye_diagram[i * 256 + j]);
+//             }
+//
 //             eprintln!();
 //         }
 //     }
