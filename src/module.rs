@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use crate::{DATA_PACK_SIZE, DataPack, mac::{SIZE_INDEX, SIZE_SIZE}};
+use crate::{DATA_PACK_SIZE, DataPack, mac::{SIZE_INDEX, SIZE_SIZE, CRC_SIZE}};
 use lazy_static;
 
 
@@ -88,7 +88,7 @@ impl Modulator {
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
         pulse_shaping(BARKER.iter().cloned()
             .chain(ByteToBitIter::from(
-                (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
+                (0..buffer[SIZE_INDEX] as usize + 1).map(move |index| buffer[index])
             )))
     }
 }
@@ -112,9 +112,9 @@ impl BitReceive {
         if self.count <= (SIZE_INDEX + SIZE_SIZE) * 8 {
             None
         } else {
-            if self.inner[SIZE_INDEX] as usize > DATA_PACK_SIZE {
+            if self.inner[SIZE_INDEX] as usize > DATA_PACK_SIZE - CRC_SIZE {
                 Some(None)
-            } else if self.count < self.inner[SIZE_INDEX] as usize * 8 {
+            } else if self.count < (self.inner[SIZE_INDEX] as usize + CRC_SIZE) * 8 {
                 None
             } else {
                 Some(Some(self.inner))

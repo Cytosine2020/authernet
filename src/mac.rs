@@ -112,7 +112,7 @@ impl MacLayer {
 
         let size = BODY_INDEX + data.len();
 
-        result[SIZE_INDEX] = size as u8 + 1;
+        result[SIZE_INDEX] = size as u8;
         result[BODY_INDEX..size].copy_from_slice(data);
 
         result
@@ -126,7 +126,7 @@ impl MacLayer {
         let size = data[SIZE_INDEX] as usize;
         let mac_data = MacData::copy_from_slice(&data);
 
-        size > 1 && crc_calculate(&data[..size]) == 0 &&
+        size > 0 && crc_calculate(&data[..size + CRC_SIZE]) == 0 &&
             mac_data.get_src() != self.mac_addr &&
             (mac_data.get_dest() == self.mac_addr ||
                 mac_data.get_dest() == MacData::BROADCAST_MAC)
@@ -135,12 +135,12 @@ impl MacLayer {
 
 pub fn mac_wrap(data: &mut DataPack, index: u8) {
     data[INDEX_INDEX] = index;
-    let size = data[SIZE_INDEX] as usize - 1;
+    let size = data[SIZE_INDEX] as usize;
     data[size] = crc_calculate(&data[..size]);
 }
 
 pub fn mac_unwrap(data: &DataPack) -> (MacData, &[u8]) {
     let size = data[SIZE_INDEX] as usize;
     let mac_data = MacData::copy_from_slice(&data);
-    (mac_data, &data[BODY_INDEX..size - CRC_SIZE])
+    (mac_data, &data[BODY_INDEX..size])
 }

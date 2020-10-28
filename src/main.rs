@@ -9,7 +9,7 @@ use std::{env, fs::File, io::{Read, BufReader, Write}};
 use crate::{acoustic::Athernet, mac::{BODY_MAX_SIZE, MacLayer, MacData, mac_unwrap}};
 
 
-const DATA_PACK_SIZE: usize = 128;
+const DATA_PACK_SIZE: usize = 256;
 
 pub type DataPack = [u8; DATA_PACK_SIZE];
 
@@ -134,7 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     count += data.len() as u64;
                 }
 
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
     }
