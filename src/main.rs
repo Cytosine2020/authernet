@@ -108,8 +108,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for data_pack in FileRead::new(iter, dest, mac_layer.clone()) {
                     athernet.send(&data_pack)?;
                 }
-
-                std::thread::sleep(std::time::Duration::from_secs(10));
             }
             Command::Recv(name) => {
                 let first_pack = athernet.recv()?;
