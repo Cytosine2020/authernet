@@ -133,7 +133,6 @@ pub struct Demodulator {
     state: DemodulateState,
     last_prod: i64,
     moving_average: i64,
-    eye_diagram: [usize; 256 * 2 * SYMBOL_LEN],
 }
 
 impl Demodulator {
@@ -169,9 +168,10 @@ impl Demodulator {
             state: DemodulateState::WAITE,
             last_prod: 0,
             moving_average: 0,
-            eye_diagram: [0; 256 * 2 * SYMBOL_LEN],
         }
     }
+
+    pub fn is_active(&self) -> bool { self.moving_average > Self::ACTIVE_THRESHOLD }
 
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
         if self.window.len() == Self::PREAMBLE_LEN {
@@ -187,8 +187,7 @@ impl Demodulator {
 
         match self.state {
             DemodulateState::WAITE => {
-                if self.window.len() >= Self::PREAMBLE_LEN &&
-                    self.moving_average > Self::ACTIVE_THRESHOLD {
+                if self.window.len() >= Self::PREAMBLE_LEN && self.is_active() {
                     prod = self.preamble_product();
 
                     if prod > threshold &&
@@ -211,13 +210,6 @@ impl Demodulator {
                 self.state = if count == SYMBOL_LEN {
                     let prod = self.section_product(self.window.len() - SYMBOL_LEN);
 
-                    for (index, item) in self.window.iter()
-                        .skip(self.window.len() - SYMBOL_LEN).enumerate() {
-                        let offset = (*item / 256) as usize + 128;
-
-                        self.eye_diagram[index * 256 + offset] += 1;
-                    }
-
                     if let Some(result) = buffer.push(prod > 0) {
                         self.state = DemodulateState::WAITE;
                         self.window.clear();
@@ -233,29 +225,6 @@ impl Demodulator {
 
         self.last_prod = prod;
 
-        // eprintln!("{}\t{}", threshold, self.last_prod);
-        // eprintln!("{}", item);
-
         None
     }
 }
-
-// impl Drop for Demodulator {
-//     fn drop(&mut self) {
-//         for j in 0..256 {
-//             for i in 0..SYMBOL_LEN {
-//                 eprint!("{}\t", self.eye_diagram[i * 256 + j]);
-//             }
-//
-//             for i in 0..SYMBOL_LEN {
-//                 eprint!("{}\t", self.eye_diagram[i * 256 + j]);
-//             }
-//
-//             for i in 0..SYMBOL_LEN {
-//                 eprint!("{}\t", self.eye_diagram[i * 256 + j]);
-//             }
-//
-//             eprintln!();
-//         }
-//     }
-// }
