@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, atomic::{AtomicBool, Ordering},
+    Arc, atomic::AtomicBool,
     mpsc::{self, Receiver, RecvError, TryRecvError, Sender, SendError},
 };
 use cpal::{

@@ -1,22 +1,34 @@
 use std::collections::VecDeque;
-use crate::{SECTION_LEN, DATA_PACK_SIZE, DataPack, mac::{SIZE_INDEX, SIZE_SIZE}};
+use crate::{DATA_PACK_SIZE, DataPack, mac::{SIZE_INDEX, SIZE_SIZE}};
 use lazy_static;
 
 
-lazy_static!(
-    static ref CARRIER: [i16; SECTION_LEN] = {
-        let mut wave = [0i16; SECTION_LEN];
+const SYMBOL_LEN: usize = 5;
 
-        for i in 0..SECTION_LEN {
-            let t = i as f32 * std::f32::consts::PI / SECTION_LEN as f32;
-            wave[i] = (t.sin() * std::i16::MAX as f32) as i16;
+
+lazy_static!(
+    pub static ref CARRIER: [i16; SYMBOL_LEN] = {
+        let mut carrier = [0i16; SYMBOL_LEN];
+
+        const ZERO: f32 = SYMBOL_LEN as f32 / 2. - 0.5;
+
+        for i in 0..SYMBOL_LEN {
+            let t = (i as f32 - ZERO) * std::f32::consts::PI * 2. / SYMBOL_LEN as f32;
+
+            let sinc = if t.abs() < 1e-6 {
+                1.
+            } else {
+                t.sin() / t
+            };
+
+            carrier[i] = (sinc * std::i16::MAX as f32) as i16;
         }
 
-        wave
+        carrier
     };
 );
 
-pub fn carrier() -> impl Iterator<Item=i16> + 'static {
+fn carrier() -> impl Iterator<Item=i16> + 'static {
     CARRIER.iter().cloned()
 }
 
@@ -65,7 +77,7 @@ impl<T: Iterator<Item=u8>> Iterator for ByteToBitIter<T> {
 }
 
 
-fn bpsk_modulate<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
+fn pulse_shaping<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
     iter.map(move |bit| {
         carrier().map(move |item| if bit { item } else { -item })
     }).flatten()
@@ -77,7 +89,7 @@ impl Modulator {
     pub fn new() -> Self { Self {} }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        bpsk_modulate(BARKER.iter().cloned()
+        pulse_shaping(BARKER.iter().cloned()
             .chain(ByteToBitIter::from(
                 (0..buffer[SIZE_INDEX] as usize).map(move |index| buffer[index])
             )))
@@ -124,11 +136,11 @@ pub struct Demodulator {
     state: DemodulateState,
     last_prod: i64,
     moving_average: i64,
-    eye_diagram: [usize; 256 * 2 * SECTION_LEN],
+    eye_diagram: [usize; 256 * 2 * SYMBOL_LEN],
 }
 
 impl Demodulator {
-    const PREAMBLE_LEN: usize = SECTION_LEN * BARKER.len();
+    const PREAMBLE_LEN: usize = SYMBOL_LEN * BARKER.len();
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 20;
     const MOVING_AVERAGE: i64 = 32;
     const ACTIVE_THRESHOLD: i64 = 128;
@@ -142,7 +154,7 @@ impl Demodulator {
     fn preamble_product(&self) -> i64 {
         Self::dot_product(
             self.window.iter().skip(self.window.len() - Self::PREAMBLE_LEN).cloned(),
-            bpsk_modulate(BARKER.iter().cloned()),
+            pulse_shaping(BARKER.iter().cloned()),
         )
     }
 
@@ -160,7 +172,7 @@ impl Demodulator {
             state: DemodulateState::WAITE,
             last_prod: 0,
             moving_average: 0,
-            eye_diagram: [0; 256 * 2 * SECTION_LEN],
+            eye_diagram: [0; 256 * 2 * SYMBOL_LEN],
         }
     }
 
@@ -187,7 +199,7 @@ impl Demodulator {
                         .enumerate().map(|(index, bit)| {
                         let shift = self.window.len() - Self::PREAMBLE_LEN;
 
-                        let prod = self.section_product(shift + index * SECTION_LEN);
+                        let prod = self.section_product(shift + index * SYMBOL_LEN);
 
                         if *bit == (prod > 0) { 1 } else { 0 }
                     }).sum::<usize>() {
@@ -199,15 +211,15 @@ impl Demodulator {
             DemodulateState::RECEIVE(mut count, mut buffer) => {
                 count += 1;
 
-                self.state = if count == SECTION_LEN {
-                    let prod = self.section_product(self.window.len() - SECTION_LEN);
+                self.state = if count == SYMBOL_LEN {
+                    let prod = self.section_product(self.window.len() - SYMBOL_LEN);
 
                     for (index, item) in self.window.iter()
-                        .skip(self.window.len() - SECTION_LEN).enumerate() {
+                        .skip(self.window.len() - SYMBOL_LEN).enumerate() {
                         let offset = (*item / 256) as usize + 128;
 
                         self.eye_diagram[index * 256 + offset] += 1;
-                        self.eye_diagram[(index + SECTION_LEN) * 256 + offset] += 1;
+                        self.eye_diagram[(index + SYMBOL_LEN) * 256 + offset] += 1;
                     }
 
                     if let Some(result) = buffer.push(prod > 0) {
