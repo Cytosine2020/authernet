@@ -28,9 +28,7 @@ lazy_static!(
     };
 );
 
-fn carrier() -> impl Iterator<Item=i16> + 'static {
-    CARRIER.iter().cloned()
-}
+fn carrier() -> impl Iterator<Item=i16> + 'static { CARRIER.iter().cloned() }
 
 
 const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
@@ -86,10 +84,9 @@ impl Modulator {
     pub fn new() -> Self { Self {} }
 
     pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
-        pulse_shaping(BARKER.iter().cloned()
-            .chain(ByteToBitIter::from(
-                (0..buffer[SIZE_INDEX] as usize + 1).map(move |index| buffer[index])
-            )))
+        pulse_shaping(BARKER.iter().cloned().chain(ByteToBitIter::from(
+            (0..buffer[SIZE_INDEX] as usize + 1).map(move |index| buffer[index])
+        )))
     }
 }
 
@@ -139,11 +136,9 @@ impl Demodulator {
     const PREAMBLE_LEN: usize = SYMBOL_LEN * BARKER.len();
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 19;
     const MOVING_AVERAGE: i64 = 16;
-    const ACTIVE_THRESHOLD: i64 = 128;
+    const ACTIVE_THRESHOLD: i64 = 512;
 
-    fn dot_product<I, U>(iter_a: I, iter_b: U) -> i64
-        where I: Iterator<Item=i16>, U: Iterator<Item=i16>,
-    {
+    fn dot_product<I: Iterator<Item=i16>, U: Iterator<Item=i16>>(iter_a: I, iter_b: U) -> i64 {
         iter_a.zip(iter_b).map(|(a, b)| a as i64 * b as i64).sum::<i64>()
     }
 
@@ -174,14 +169,10 @@ impl Demodulator {
     pub fn is_active(&self) -> bool { self.moving_average > Self::ACTIVE_THRESHOLD }
 
     pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
-        if self.window.len() == Self::PREAMBLE_LEN {
-            self.window.pop_front();
-        }
-
+        if self.window.len() == Self::PREAMBLE_LEN { self.window.pop_front(); }
         self.window.push_back(item);
 
         self.moving_average = Self::moving_average(self.moving_average, (item as i64).abs());
-
         let threshold = self.moving_average * Self::HEADER_THRESHOLD_SCALE;
         let mut prod = 0;
 
@@ -190,8 +181,7 @@ impl Demodulator {
                 if self.window.len() >= Self::PREAMBLE_LEN && self.is_active() {
                     prod = self.preamble_product();
 
-                    if prod > threshold &&
-                        self.last_prod > prod && BARKER.len() <= BARKER.iter()
+                    if prod > threshold && self.last_prod > prod && BARKER.len() <= BARKER.iter()
                         .enumerate().map(|(index, bit)| {
                         let shift = self.window.len() - Self::PREAMBLE_LEN;
 

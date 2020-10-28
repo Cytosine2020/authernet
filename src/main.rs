@@ -129,6 +129,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     file.write_all(data)?;
 
+                    println!("receive {}", data.len());
+
                     count += data.len() as u64;
                 }
 
