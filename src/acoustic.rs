@@ -6,7 +6,7 @@ use cpal::{
     Host, Device, Sample, SupportedStreamConfig, SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use rand::Rng;
+use rand::{thread_rng, Rng};
 use crate::{DataPack,
     mac::{INDEX_INDEX, MacData, MacLayer, mac_wrap},
     module::{Modulator, Demodulator},
@@ -92,10 +92,8 @@ impl Athernet {
             }).flatten())
         };
 
-        let mut rng = rand::thread_rng();
-
-        let back_off = |data, count| {
-            let back_off = rng.gen_range(1, 8) + (1 << count);
+        let back_off = |data, count: usize| {
+            let back_off = thread_rng().gen_range::<usize, usize, usize>(1, 8) + (1 << count);
             SendState::BackOff(data, back_off * BACK_OFF_WINDOW, count)
         };
 
