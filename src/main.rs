@@ -11,13 +11,12 @@ use crate::{acoustic::Athernet, mac::{BODY_MAX_SIZE, MacLayer, MacData, DataPack
 
 pub struct FileRead<T> {
     iter: T,
-    dest: u8,
     mac_layer: MacLayer,
 }
 
 impl<T> FileRead<T> {
-    pub fn new(iter: T, dest: u8, mac_layer: MacLayer) -> Self {
-        Self { iter, dest, mac_layer }
+    pub fn new(iter: T, mac_layer: MacLayer) -> Self {
+        Self { iter, mac_layer }
     }
 }
 
@@ -38,7 +37,7 @@ impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
             }
         }
 
-        Some(self.mac_layer.wrap(self.dest, MacData::DATA, &ret[..size]))
+        Some(self.mac_layer.wrap(MacData::DATA, &ret[..size]))
     }
 }
 
@@ -82,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mac_layer = MacLayer::new(src);
+    let mac_layer = MacLayer::new(src, dest);
 
     let athernet = Athernet::new(mac_layer.clone())?;
 
@@ -95,12 +94,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("sending {:?}, size {}", name, size);
 
-                athernet.send(&mac_layer.wrap(dest, MacData::DATA, &size.to_le_bytes()))?;
+                athernet.send(&mac_layer.wrap(MacData::DATA, &size.to_le_bytes()))?;
 
                 let iter = BufReader::new(file)
                     .bytes().filter_map(|item| item.ok());
 
-                for data_pack in FileRead::new(iter, dest, mac_layer.clone()) {
+                for data_pack in FileRead::new(iter, mac_layer.clone()) {
                     athernet.send(&data_pack)?;
                 }
             }
@@ -133,6 +132,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    // std::thread::sleep(std::time::Duration::from_secs(20));
 
     Ok(())
 }

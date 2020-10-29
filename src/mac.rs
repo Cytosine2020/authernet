@@ -49,6 +49,7 @@ fn crc_calculate(data: &[u8]) -> u8 {
 
 pub struct MacData {
     inner: u16,
+    index: u8,
 }
 
 impl MacData {
@@ -69,7 +70,7 @@ impl MacData {
     pub fn copy_from_slice(data_: &DataPack) -> Self {
         let mut data = [0u8; 2];
         data.copy_from_slice(&data_[MAC_INDEX..MAC_INDEX + MAC_SIZE]);
-        Self { inner: u16::from_le_bytes(data) }
+        Self { inner: u16::from_le_bytes(data), index: data_[INDEX_INDEX] }
     }
 
     #[inline]
@@ -78,11 +79,11 @@ impl MacData {
     }
 
     #[inline]
-    pub fn new(src: u8, dest: u8, op: u8) -> Self {
+    pub fn new(src: u8, dest: u8, op: u8, index: u8) -> Self {
         let inner = (((op & Self::OP_MASK) as u16) << Self::OP_OFFSET) |
             (((dest & Self::MAC_MASK) as u16) << Self::DEST_OFFSET) |
             (((src & Self::MAC_MASK) as u16) << Self::SRC_OFFSET);
-        Self { inner }
+        Self { inner, index }
     }
 
     #[inline]
@@ -95,22 +96,23 @@ impl MacData {
     pub fn get_src(&self) -> u8 { (self.inner >> Self::SRC_OFFSET) as u8 & Self::MAC_MASK }
 
     #[inline]
-    pub fn get_mac(&self) -> (u8, u8) { (self.get_src(), self.get_dest()) }
+    pub fn get_index(&self) -> u8 { self.index }
 }
 
 #[derive(Clone)]
 pub struct MacLayer {
     mac_addr: u8,
+    dest: u8,
 }
 
 impl MacLayer {
     #[inline]
-    pub fn new(mac_addr: u8) -> Self { Self { mac_addr } }
+    pub fn new(mac_addr: u8, dest: u8) -> Self { Self { mac_addr, dest } }
 
-    pub fn wrap(&self, dest: u8, op: u8, data: &[u8]) -> DataPack {
+    pub fn wrap(&self, op: u8, data: &[u8]) -> DataPack {
         let mut result: DataPack = [0; DATA_PACK_SIZE];
 
-        MacData::new(self.mac_addr, dest, op).copy_to_slice(&mut result);
+        MacData::new(self.mac_addr, self.dest, op, 0).copy_to_slice(&mut result);
 
         let size = BODY_INDEX + data.len();
 
@@ -120,8 +122,8 @@ impl MacLayer {
         result
     }
 
-    pub fn create_ack(&self, dest: u8) -> DataPack {
-        self.wrap(dest, MacData::ACK, &[])
+    pub fn create_ack(&self) -> DataPack {
+        self.wrap(MacData::ACK, &[])
     }
 
     pub fn check(&self, data: &DataPack) -> bool {
@@ -129,7 +131,7 @@ impl MacLayer {
         let mac_data = MacData::copy_from_slice(&data);
 
         size > 0 && crc_calculate(&data[..size + CRC_SIZE]) == 0 &&
-            mac_data.get_src() != self.mac_addr &&
+            mac_data.get_src() == self.dest &&
             (mac_data.get_dest() == self.mac_addr ||
                 mac_data.get_dest() == MacData::BROADCAST_MAC)
     }

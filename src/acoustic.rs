@@ -8,7 +8,7 @@ use cpal::{
 };
 use rand::{Rng, thread_rng};
 use crate::{
-    mac::{INDEX_INDEX, mac_wrap, DataPack, MacData, MacLayer},
+    mac::{mac_wrap, DataPack, MacData, MacLayer},
     module::{Demodulator, Modulator},
 };
 
@@ -65,11 +65,11 @@ impl Athernet {
 
         let sending = move |buffer, count| {
             // let mac_data = MacData::copy_from_slice(&buffer);
-            // let dest = mac_data.get_dest();
+            // let tag = (mac_data.get_dest(), mac_data.get_index());
             //
             // match mac_data.get_op() {
-            //     MacData::DATA => println!("sending data {:?}", (dest, buffer[INDEX_INDEX])),
-            //     MacData::ACK => println!("sending ack {:?}", (dest, buffer[INDEX_INDEX])),
+            //     MacData::DATA => println!("sending data {:?}", tag),
+            //     MacData::ACK => println!("sending ack {:?}", tag),
             //     _ => {}
             // }
 
@@ -79,17 +79,18 @@ impl Athernet {
         };
 
         let back_off = move |buffer, count: usize| {
-            if count > 10 {
+            // let mac_data = MacData::copy_from_slice(&buffer);
+            // let tag = (mac_data.get_dest(), mac_data.get_index());
+
+            if count <= 10 {
                 let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 8) +
                     if count > 5 { 1 << 5 } else { 1 << count };
 
-                // let dest = MacData::copy_from_slice(&buffer).get_dest();
-                // println!("back off {:?}", (dest, buffer[INDEX_INDEX], back_off));
+                // println!("back off {:?}", (tag, back_off));
 
                 Some((buffer, back_off * BACK_OFF_WINDOW, count))
             } else {
-                // let dest = MacData::copy_from_slice(&buffer).get_dest();
-                // println!("package loss {:?}", (dest, buffer[INDEX_INDEX], back_off));
+                // println!("package loss {:?}", (tag, count));
 
                 None
             }
@@ -113,8 +114,8 @@ impl Athernet {
 
                     match send_state {
                         SendState::Idle => {
-                            if let Some((dest, index)) = ack_send.next() {
-                                let mut buffer = mac_layer.create_ack(dest);
+                            if let Some((_, index)) = ack_send.next() {
+                                let mut buffer = mac_layer.create_ack();
                                 mac_wrap(&mut buffer, index);
 
                                 send_state = sending(buffer, 0);
@@ -165,10 +166,10 @@ impl Athernet {
                         }
                         SendState::WaitAck(buffer, ref mut time, count) => {
                             if *time > 0 {
-                                let dest = MacData::copy_from_slice(&buffer).get_dest();
-                                let index = buffer[INDEX_INDEX];
+                                let mac_data = MacData::copy_from_slice(&buffer);
+                                let tag = (mac_data.get_dest(), mac_data.get_index());
 
-                                if ack_recv.iter().any(|item| *item == (dest, index)) {
+                                if ack_recv.iter().any(|item| *item == tag) {
                                     send_state = SendState::Idle;
                                 } else {
                                     *time -= 1;
@@ -220,7 +221,7 @@ impl Athernet {
                         if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
                             if mac_layer.check(&buffer) {
                                 let mac_data = MacData::copy_from_slice(&buffer);
-                                let tag = (mac_data.get_src(), buffer[INDEX_INDEX]);
+                                let tag = (mac_data.get_src(), mac_data.get_index());
                                 let count_ref = &mut mac_index[tag.0 as usize];
 
                                 match mac_data.get_op() {
