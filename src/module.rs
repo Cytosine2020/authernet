@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use lazy_static;
-use crate::mac::{DATA_PACK_SIZE, SIZE_INDEX, SIZE_SIZE, CRC_SIZE, DataPack};
+use crate::mac::{MAC_FRAME_MAX, CRC_SIZE, MacFrame, MacFrameRaw};
 
 
 const SYMBOL_LEN: usize = 5;
@@ -83,9 +83,12 @@ pub struct Modulator {}
 impl Modulator {
     pub fn new() -> Self { Self {} }
 
-    pub fn iter(&self, buffer: DataPack) -> impl Iterator<Item=i16> {
+    pub fn iter(&self, buffer: MacFrame) -> impl Iterator<Item=i16> {
+        let size = buffer.get_size() + 1;
+        let raw = buffer.into_raw();
+
         pulse_shaping(BARKER.iter().cloned().chain(ByteToBitIter::from(
-            (0..buffer[SIZE_INDEX] as usize + 1).map(move |index| buffer[index])
+            (0..size).map(move |index| raw[index])
         )))
     }
 }
@@ -93,28 +96,34 @@ impl Modulator {
 
 #[derive(Copy, Clone)]
 pub struct BitReceive {
-    inner: DataPack,
+    inner: MacFrameRaw,
     count: usize,
 }
 
 impl BitReceive {
     #[inline]
-    pub fn new() -> Self { Self { inner: [0; DATA_PACK_SIZE], count: 0 } }
+    pub fn new() -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0 } }
 
     #[inline]
-    pub fn push(&mut self, bit: bool) -> Option<Option<DataPack>> {
+    pub fn push(&mut self, bit: bool) -> Option<MacFrame> {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
 
-        if self.count <= (SIZE_INDEX + SIZE_SIZE) * 8 {
+        if self.count <= (MacFrame::MAC_DATA_SIZE + 1) * 8 {
             None
         } else {
-            if self.inner[SIZE_INDEX] as usize > DATA_PACK_SIZE - CRC_SIZE {
-                Some(None)
-            } else if self.count < (self.inner[SIZE_INDEX] as usize + CRC_SIZE) * 8 {
+            let mut size = if self.inner[MacFrame::OP_INDEX] == MacFrame::OP_ACK {
+                0
+            } else {
+                self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1
+            };
+
+            size += MacFrame::MAC_DATA_SIZE + CRC_SIZE;
+
+            if self.count < size * 8 {
                 None
             } else {
-                Some(Some(self.inner))
+                Some(MacFrame::from_raw(self.inner))
             }
         }
     }
@@ -168,7 +177,7 @@ impl Demodulator {
 
     pub fn is_active(&self) -> bool { self.moving_average > Self::ACTIVE_THRESHOLD }
 
-    pub fn push_back(&mut self, item: i16) -> Option<DataPack> {
+    pub fn push_back(&mut self, item: i16) -> Option<MacFrame> {
         if self.window.len() == Self::PREAMBLE_LEN { self.window.pop_front(); }
         self.window.push_back(item);
 
@@ -203,7 +212,7 @@ impl Demodulator {
                     if let Some(result) = buffer.push(prod > 0) {
                         self.state = DemodulateState::WAITE;
                         self.window.clear();
-                        return result;
+                        return Some(result);
                     }
 
                     DemodulateState::RECEIVE(0, buffer)

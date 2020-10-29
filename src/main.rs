@@ -5,18 +5,21 @@ pub mod mac;
 #[macro_use]
 extern crate lazy_static;
 
-use std::{env, fs::File, io::{Read, BufReader, Write}};
-use crate::{acoustic::Athernet, mac::{BODY_MAX_SIZE, MacLayer, MacData, DataPack, mac_unwrap}};
 
+use std::{env, fs::File, io::{Read, BufReader, Write}};
+use crate::mac::{DATA_PACK_MAX, DataPack, MacLayer};
+
+fn data_pack_unwrap(data_pack: &DataPack) -> &[u8] {
+    &data_pack[1..][..data_pack[0] as usize]
+}
 
 pub struct FileRead<T> {
     iter: T,
-    mac_layer: MacLayer,
 }
 
 impl<T> FileRead<T> {
-    pub fn new(iter: T, mac_layer: MacLayer) -> Self {
-        Self { iter, mac_layer }
+    pub fn new(iter: T) -> Self {
+        Self { iter }
     }
 }
 
@@ -24,12 +27,12 @@ impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
     type Item = DataPack;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut ret = [0; BODY_MAX_SIZE];
-        let mut size = BODY_MAX_SIZE;
+        let mut ret = [0; DATA_PACK_MAX];
+        let mut size = DATA_PACK_MAX;
 
-        for i in 0..BODY_MAX_SIZE {
+        for i in 0..DATA_PACK_MAX - 1 {
             if let Some(byte) = self.iter.next() {
-                ret[i] = byte;
+                ret[i + 1] = byte;
             } else {
                 if i == 0 { return None; }
                 size = i;
@@ -37,7 +40,9 @@ impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
             }
         }
 
-        Some(self.mac_layer.wrap(MacData::DATA, &ret[..size]))
+        ret[0] = size as u8;
+
+        Some(ret)
     }
 }
 
@@ -81,9 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mac_layer = MacLayer::new(src, dest);
-
-    let athernet = Athernet::new(mac_layer.clone())?;
+    let mut athernet = MacLayer::new(src, dest)?;
 
     for command in commands {
         match command {
@@ -94,18 +97,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("sending {:?}, size {}", name, size);
 
-                athernet.send(&mac_layer.wrap(MacData::DATA, &size.to_le_bytes()))?;
+                let mut buffer = [0; DATA_PACK_MAX];
+                buffer[0] = 8;
+                buffer[1..9].copy_from_slice(&size.to_le_bytes());
+
+                athernet.send(&buffer)?;
 
                 let iter = BufReader::new(file)
                     .bytes().filter_map(|item| item.ok());
 
-                for data_pack in FileRead::new(iter, mac_layer.clone()) {
+                for data_pack in FileRead::new(iter) {
                     athernet.send(&data_pack)?;
                 }
             }
             Command::Recv(name) => {
                 let first_pack = athernet.recv()?;
-                let (_, first_data) = mac_unwrap(&first_pack);
+                let first_data = data_pack_unwrap(&first_pack);
 
                 let mut size_buffer = [0u8; 8];
                 size_buffer.copy_from_slice(first_data);
@@ -119,10 +126,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 while count < size {
                     let pack = athernet.recv()?;
-                    let (_, data) = mac_unwrap(&pack);
+                    let data = data_pack_unwrap(&pack);
 
                     file.write_all(data)?;
-
                     count += data.len() as u64;
                 }
 
@@ -133,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::thread::sleep(std::time::Duration::from_secs(10));
 
     Ok(())
 }

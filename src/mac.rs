@@ -1,18 +1,13 @@
 use lazy_static;
+use crate::acoustic::Athernet;
 
 
-pub const DATA_PACK_SIZE: usize = 256;
-pub const SIZE_INDEX: usize = 0;
-pub const SIZE_SIZE: usize = 1;
-pub const MAC_INDEX: usize = SIZE_INDEX + SIZE_SIZE;
-pub const MAC_SIZE: usize = 2;
-pub const INDEX_INDEX: usize = MAC_INDEX + MAC_SIZE;
-pub const INDEX_SIZE: usize = 1;
-pub const BODY_INDEX: usize = INDEX_INDEX + INDEX_SIZE;
-pub const BODY_MAX_SIZE: usize = DATA_PACK_SIZE - BODY_INDEX - CRC_SIZE;
+pub const DATA_PACK_MAX: usize = 256;
 pub const CRC_SIZE: usize = 1;
+pub const MAC_FRAME_MAX: usize = MacFrame::MAC_DATA_SIZE + DATA_PACK_MAX + CRC_SIZE;
 
-pub type DataPack = [u8; DATA_PACK_SIZE];
+pub type DataPack = [u8; DATA_PACK_MAX];
+pub type MacFrameRaw = [u8; MAC_FRAME_MAX];
 
 
 lazy_static!(
@@ -47,104 +42,154 @@ fn crc_calculate(data: &[u8]) -> u8 {
     crc
 }
 
-pub struct MacData {
-    inner: u16,
-    index: u8,
+#[derive(Copy, Clone)]
+pub struct MacFrame {
+    inner: MacFrameRaw,
 }
 
-impl MacData {
-    pub const MAC_SIZE: u8 = 6;
-    pub const OP_SIZE: u8 = 4;
-    pub const MAC_MASK: u8 = (1 << Self::MAC_SIZE) - 1;
-    pub const OP_MASK: u8 = (1 << Self::OP_SIZE) - 1;
-    pub const OP_OFFSET: u16 = 0;
-    pub const DEST_OFFSET: u16 = Self::OP_OFFSET + Self::OP_SIZE as u16;
-    pub const SRC_OFFSET: u16 = Self::DEST_OFFSET + Self::MAC_SIZE as u16;
+impl MacFrame {
+    pub const DEST_INDEX: usize = 0;
+    pub const SRC_INDEX: usize = Self::DEST_INDEX + 1;
+    pub const OP_INDEX: usize = Self::SRC_INDEX + 1;
+    pub const TAG_INDEX: usize = Self::OP_INDEX + 1;
+    pub const MAC_DATA_SIZE: usize = Self::TAG_INDEX + 1;
 
-    pub const BROADCAST_MAC: u8 = 0b111111;
+    pub const BROADCAST_MAC: u8 = 0b11111111;
 
-    pub const DATA: u8 = 0b0000;
-    pub const ACK: u8 = 0b1111;
+    pub const OP_DATA: u8 = 0b0000;
+    pub const OP_PING_REQ: u8 = 0b0001;
+    pub const OP_PING_REPLY: u8 = 0b0010;
+    pub const OP_ACK: u8 = 0b1111;
 
     #[inline]
-    pub fn copy_from_slice(data_: &DataPack) -> Self {
-        let mut data = [0u8; 2];
-        data.copy_from_slice(&data_[MAC_INDEX..MAC_INDEX + MAC_SIZE]);
-        Self { inner: u16::from_le_bytes(data), index: data_[INDEX_INDEX] }
+    pub fn wrap(src: u8, dest: u8, op: u8, tag: u8, data: &DataPack) -> Self {
+        let mut inner = [0u8; MAC_FRAME_MAX];
+
+        inner[Self::SRC_INDEX] = src;
+        inner[Self::DEST_INDEX] = dest;
+        inner[Self::OP_INDEX] = op;
+        inner[Self::TAG_INDEX] = tag;
+        inner[Self::MAC_DATA_SIZE..][..DATA_PACK_MAX].copy_from_slice(data);
+
+        let mut ret = Self { inner };
+
+        let size = ret.get_size();
+
+        ret.inner[size] = crc_calculate(&ret.inner[..size]);
+
+        ret
+    }
+
+    pub fn new_ack(src: u8, dest: u8, tag: u8) -> Self {
+        let mut inner = [0u8; MAC_FRAME_MAX];
+
+        inner[Self::SRC_INDEX] = src;
+        inner[Self::DEST_INDEX] = dest;
+        inner[Self::OP_INDEX] = Self::OP_ACK;
+        inner[Self::TAG_INDEX] = tag;
+        inner[Self::MAC_DATA_SIZE] = crc_calculate(&inner[..Self::MAC_DATA_SIZE]);
+
+        Self { inner }
     }
 
     #[inline]
-    pub fn copy_to_slice(&self, data_pack: &mut DataPack) {
-        data_pack[MAC_INDEX..MAC_INDEX + MAC_SIZE].copy_from_slice(&self.inner.to_le_bytes());
+    pub fn from_raw(inner: MacFrameRaw) -> Self { Self { inner } }
+
+    #[inline]
+    pub fn into_raw(self) -> MacFrameRaw { self.inner }
+
+    #[inline]
+    pub fn get_size(&self) -> usize {
+        Self::MAC_DATA_SIZE + if self.get_op() == Self::OP_ACK {
+            0
+        } else {
+            self.inner[Self::MAC_DATA_SIZE] as usize + 1
+        }
     }
 
     #[inline]
-    pub fn new(src: u8, dest: u8, op: u8, index: u8) -> Self {
-        let inner = (((op & Self::OP_MASK) as u16) << Self::OP_OFFSET) |
-            (((dest & Self::MAC_MASK) as u16) << Self::DEST_OFFSET) |
-            (((src & Self::MAC_MASK) as u16) << Self::SRC_OFFSET);
-        Self { inner, index }
+    pub fn get_src(&self) -> u8 { self.inner[Self::SRC_INDEX] }
+
+    #[inline]
+    pub fn get_dest(&self) -> u8 { self.inner[Self::DEST_INDEX] }
+
+    #[inline]
+    pub fn get_op(&self) -> u8 { self.inner[Self::OP_INDEX] }
+
+    #[inline]
+    pub fn get_tag(&self) -> u8 { self.inner[Self::TAG_INDEX] }
+
+    #[inline]
+    pub fn need_ack(&self) -> bool {
+        self.get_op() == MacFrame::OP_DATA && self.get_dest() != MacFrame::BROADCAST_MAC
     }
 
     #[inline]
-    pub fn get_op(&self) -> u8 { (self.inner >> Self::OP_OFFSET) as u8 & Self::OP_MASK }
+    pub fn need_back_off(&self) -> bool {
+        self.get_op() == MacFrame::OP_DATA
+    }
 
     #[inline]
-    pub fn get_dest(&self) -> u8 { (self.inner >> Self::DEST_OFFSET) as u8 & Self::MAC_MASK }
+    pub fn check(&self, mac_addr: u8) -> bool {
+        crc_calculate(&self.inner[..self.get_size() + CRC_SIZE]) == 0 &&
+            (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
+    }
 
     #[inline]
-    pub fn get_src(&self) -> u8 { (self.inner >> Self::SRC_OFFSET) as u8 & Self::MAC_MASK }
-
-    #[inline]
-    pub fn get_index(&self) -> u8 { self.index }
+    pub fn unwrap(&self) -> DataPack {
+        let mut data_pack = [0u8; DATA_PACK_MAX];
+        let size = self.get_size();
+        data_pack[..size].copy_from_slice(&self.inner[Self::MAC_DATA_SIZE..][..size]);
+        data_pack
+    }
 }
 
-#[derive(Clone)]
 pub struct MacLayer {
+    athernet: Athernet,
+    send_tag: [u8; 255],
+    recv_tag: [u8; 255],
     mac_addr: u8,
     dest: u8,
 }
 
 impl MacLayer {
-    #[inline]
-    pub fn new(mac_addr: u8, dest: u8) -> Self { Self { mac_addr, dest } }
-
-    pub fn wrap(&self, op: u8, data: &[u8]) -> DataPack {
-        let mut result: DataPack = [0; DATA_PACK_SIZE];
-
-        MacData::new(self.mac_addr, self.dest, op, 0).copy_to_slice(&mut result);
-
-        let size = BODY_INDEX + data.len();
-
-        result[SIZE_INDEX] = size as u8;
-        result[BODY_INDEX..size].copy_from_slice(data);
-
-        result
+    pub fn new(mac_addr: u8, dest: u8) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            athernet: Athernet::new(mac_addr)?,
+            send_tag: [0; 255],
+            recv_tag: [0; 255],
+            mac_addr,
+            dest,
+        })
     }
 
-    pub fn create_ack(&self) -> DataPack {
-        self.wrap(MacData::ACK, &[])
+    pub fn send(&mut self, data: &DataPack) -> Result<(), Box<dyn std::error::Error>> {
+        let dest = self.dest as usize;
+
+        let tag = if self.dest == MacFrame::BROADCAST_MAC {
+            0
+        } else {
+            let tag = self.send_tag[dest];
+            self.send_tag[dest] = self.send_tag[dest].wrapping_add(1);
+            tag
+        };
+
+        Ok(self.athernet.send(
+            MacFrame::wrap(self.mac_addr, self.dest, MacFrame::OP_DATA, tag, data)
+        )?)
     }
 
-    pub fn check(&self, data: &DataPack) -> bool {
-        let size = data[SIZE_INDEX] as usize;
-        let mac_data = MacData::copy_from_slice(&data);
+    pub fn recv(&mut self) -> Result<DataPack, Box<dyn std::error::Error>> {
+        loop {
+            let mac_data = self.athernet.recv()?;
+            let src = mac_data.get_src();
+            let tag = mac_data.get_tag();
 
-        size > 0 && crc_calculate(&data[..size + CRC_SIZE]) == 0 &&
-            mac_data.get_src() == self.dest &&
-            (mac_data.get_dest() == self.mac_addr ||
-                mac_data.get_dest() == MacData::BROADCAST_MAC)
+            if src == self.dest && self.recv_tag[src as usize] == tag {
+                self.recv_tag[src as usize] = self.recv_tag[src as usize].wrapping_add(1);
+
+                return Ok(mac_data.unwrap())
+            }
+        }
     }
-}
-
-pub fn mac_wrap(data: &mut DataPack, index: u8) {
-    data[INDEX_INDEX] = index;
-    let size = data[SIZE_INDEX] as usize;
-    data[size] = crc_calculate(&data[..size]);
-}
-
-pub fn mac_unwrap(data: &DataPack) -> (MacData, &[u8]) {
-    let size = data[SIZE_INDEX] as usize;
-    let mac_data = MacData::copy_from_slice(&data);
-    (mac_data, &data[BODY_INDEX..size])
 }
