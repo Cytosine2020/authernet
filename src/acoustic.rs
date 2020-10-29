@@ -15,7 +15,7 @@ use crate::{
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const ACK_TIMEOUT: usize = 12000;
-const BACK_OFF_WINDOW: usize = 1000;
+const BACK_OFF_WINDOW: usize = 500;
 
 
 fn select_host() -> Host { cpal::default_host() }
@@ -83,8 +83,8 @@ impl Athernet {
             let tag = (mac_data.get_dest(), mac_data.get_index());
 
             if count <= 20 {
-                let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 4) +
-                    if count > 4 { 1 << 4 } else { 1 << count };
+                let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 16) +
+                    if count > 5 { 1 << 5 } else { 1 << count };
 
                 // println!("back off {:?}", (tag, back_off));
 
@@ -119,26 +119,25 @@ impl Athernet {
                                 mac_wrap(&mut buffer, index);
 
                                 send_state = sending(buffer, 0);
-                            } else if let Some((buffer, time, count)) = back_off_buffer {
-                                if time == 0 {
-                                    send_state = if channel_free {
+                            } else if channel_free {
+                                if let Some((buffer, time, count)) = back_off_buffer {
+                                    if time == 0 {
                                         back_off_buffer = None;
-                                        sending(buffer, count + 1)
-                                    } else {
-                                        back_off_buffer = back_off(buffer, count + 1);
-                                        SendState::Idle
+                                        send_state = sending(buffer, count + 1);
                                     }
-                                }
-                            } else if let Some(mut buffer) = receiver.try_iter().next() {
-                                let dest = MacData::copy_from_slice(&buffer).get_dest();
-                                let count_ref = &mut mac_index[dest as usize];
-                                mac_wrap(&mut buffer, *count_ref);
+                                } else if let Some(mut buffer) = receiver.try_iter().next() {
+                                    let dest = MacData::copy_from_slice(&buffer).get_dest();
+                                    let count_ref = &mut mac_index[dest as usize];
+                                    mac_wrap(&mut buffer, *count_ref);
 
-                                if dest != MacData::BROADCAST_MAC {
-                                    *count_ref = count_ref.wrapping_add(1);
-                                }
+                                    if dest != MacData::BROADCAST_MAC {
+                                        *count_ref = count_ref.wrapping_add(1);
+                                    }
 
-                                send_state = sending(buffer, 0);
+                                    send_state = sending(buffer, 0);
+                                } else {
+                                    send_state = SendState::Idle;
+                                }
                             } else {
                                 send_state = SendState::Idle;
                             };

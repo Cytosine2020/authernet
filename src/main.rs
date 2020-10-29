@@ -123,17 +123,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     file.write_all(data)?;
 
-                    println!("receive {}", data.len());
-
                     count += data.len() as u64;
                 }
 
                 std::thread::sleep(std::time::Duration::from_millis(100));
+
+                println!("receive {}", count);
             }
         }
     }
 
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    std::thread::sleep(std::time::Duration::from_secs(1));
 
     Ok(())
 }
