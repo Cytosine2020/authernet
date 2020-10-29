@@ -2,22 +2,20 @@ use std::sync::{
     Arc, atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, RecvError, Sender, SendError},
 };
-
 use cpal::{
     Device, Host, Sample, SupportedStreamConfig, SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use rand::{Rng, thread_rng};
-
 use crate::{
-    DataPack,
-    mac::{INDEX_INDEX, mac_wrap, MacData, MacLayer},
+    mac::{INDEX_INDEX, mac_wrap, DataPack, MacData, MacLayer},
     module::{Demodulator, Modulator},
 };
 
+
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const ACK_TIMEOUT: usize = 10000;
-const BACK_OFF_WINDOW: usize = 2000;
+const BACK_OFF_WINDOW: usize = 1000;
 
 
 fn select_host() -> Host { cpal::default_host() }
@@ -168,7 +166,8 @@ impl Athernet {
                                     SendState::WaitAck(buffer, time - 1)
                                 }
                             } else {
-                                sending(buffer)
+                                back_off_buffer = back_off(buffer, 0);
+                                SendState::Idle
                             };
                         }
                     }

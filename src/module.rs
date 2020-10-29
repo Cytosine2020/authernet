@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
-use crate::{DATA_PACK_SIZE, DataPack, mac::{SIZE_INDEX, SIZE_SIZE, CRC_SIZE}};
 use lazy_static;
+use crate::mac::{DATA_PACK_SIZE, SIZE_INDEX, SIZE_SIZE, CRC_SIZE, DataPack};
 
 
 const SYMBOL_LEN: usize = 5;

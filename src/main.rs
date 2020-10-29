@@ -6,12 +6,7 @@ pub mod mac;
 extern crate lazy_static;
 
 use std::{env, fs::File, io::{Read, BufReader, Write}};
-use crate::{acoustic::Athernet, mac::{BODY_MAX_SIZE, MacLayer, MacData, mac_unwrap}};
-
-
-const DATA_PACK_SIZE: usize = 256;
-
-pub type DataPack = [u8; DATA_PACK_SIZE];
+use crate::{acoustic::Athernet, mac::{BODY_MAX_SIZE, MacLayer, MacData, DataPack, mac_unwrap}};
 
 
 pub struct FileRead<T> {

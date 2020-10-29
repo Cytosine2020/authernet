@@ -1,7 +1,7 @@
-use crate::{DATA_PACK_SIZE, DataPack};
 use lazy_static;
 
 
+pub const DATA_PACK_SIZE: usize = 256;
 pub const SIZE_INDEX: usize = 0;
 pub const SIZE_SIZE: usize = 1;
 pub const MAC_INDEX: usize = SIZE_INDEX + SIZE_SIZE;
@@ -11,6 +11,8 @@ pub const INDEX_SIZE: usize = 1;
 pub const BODY_INDEX: usize = INDEX_INDEX + INDEX_SIZE;
 pub const BODY_MAX_SIZE: usize = DATA_PACK_SIZE - BODY_INDEX - CRC_SIZE;
 pub const CRC_SIZE: usize = 1;
+
+pub type DataPack = [u8; DATA_PACK_SIZE];
 
 
 lazy_static!(
