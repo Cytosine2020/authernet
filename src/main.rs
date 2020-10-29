@@ -133,7 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // std::thread::sleep(std::time::Duration::from_secs(20));
+    std::thread::sleep(std::time::Duration::from_secs(10));
 
     Ok(())
 }

@@ -14,7 +14,7 @@ use crate::{
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const ACK_TIMEOUT: usize = 10000;
+const ACK_TIMEOUT: usize = 12000;
 const BACK_OFF_WINDOW: usize = 1000;
 
 
@@ -79,18 +79,18 @@ impl Athernet {
         };
 
         let back_off = move |buffer, count: usize| {
-            // let mac_data = MacData::copy_from_slice(&buffer);
-            // let tag = (mac_data.get_dest(), mac_data.get_index());
+            let mac_data = MacData::copy_from_slice(&buffer);
+            let tag = (mac_data.get_dest(), mac_data.get_index());
 
-            if count <= 10 {
-                let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 8) +
-                    if count > 5 { 1 << 5 } else { 1 << count };
+            if count <= 20 {
+                let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 4) +
+                    if count > 4 { 1 << 4 } else { 1 << count };
 
                 // println!("back off {:?}", (tag, back_off));
 
                 Some((buffer, back_off * BACK_OFF_WINDOW, count))
             } else {
-                // println!("package loss {:?}", (tag, count));
+                println!("package loss {:?}", tag);
 
                 None
             }
