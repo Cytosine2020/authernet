@@ -47,6 +47,7 @@ impl Athernet {
         guard: Arc<AtomicBool>,
         ack_send_receiver: Receiver<(u8, u8)>,
         ack_recv_receiver: Receiver<(u8, u8)>,
+        ping_receiver: Receiver<(u8, u8)>,
     ) -> Result<(Sender<MacFrame>, cpal::Stream), Box<dyn std::error::Error>> {
         let config = select_config(device.supported_output_configs()?)?;
 
@@ -80,11 +81,11 @@ impl Athernet {
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _| {
+                let mut flag = true;
+
                 let channel_free = guard.load(Ordering::SeqCst);
 
                 let ack_recv = ack_recv_receiver.try_iter().collect::<Vec<_>>();
-                let mut ack_send = ack_send_receiver.try_iter().collect::<Vec<_>>()
-                    .into_iter();
 
                 if let Some((_, ref mut time, _)) = back_off_buffer {
                     *time = time.saturating_sub(data.len());
@@ -95,9 +96,11 @@ impl Athernet {
 
                     match send_state {
                         SendState::Idle => {
-                            if channel_free {
-                                if let Some((dest, tag)) = ack_send.next() {
+                            if channel_free && flag {
+                                if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
                                     send_state = sending(MacFrame::new_ack(mac_addr, dest, tag), 0);
+                                } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
+                                    send_state = sending(MacFrame::new_ping_reply(mac_addr, dest, tag), 0)
                                 } else if let Some((buffer, time, count)) = back_off_buffer {
                                     if time == 0 {
                                         back_off_buffer = None;
@@ -106,17 +109,19 @@ impl Athernet {
                                 } else if let Some(buffer) = receiver.try_iter().next() {
                                     send_state = sending(buffer, 0);
                                 };
+
+                                flag = false;
                             };
                         }
                         SendState::Sending(buffer, ref mut iter, count) => {
-                            if channel_free || buffer.is_ack() {
+                            if channel_free || !buffer.is_data() {
                                 if let Some(item) = iter.next() {
                                     value = item;
                                 } else {
-                                    send_state = if buffer.is_ack() || buffer.to_broadcast() {
-                                        SendState::Idle
-                                    } else {
+                                    send_state = if !buffer.is_data() && !buffer.to_broadcast() {
                                         SendState::WaitAck(buffer, ACK_TIMEOUT, count)
+                                    } else {
+                                        SendState::Idle
                                     }
                                 }
                             } else {
@@ -158,6 +163,7 @@ impl Athernet {
         guard: Arc<AtomicBool>,
         ack_send_sender: Sender<(u8, u8)>,
         ack_recv_sender: Sender<(u8, u8)>,
+        ping_sender: Sender<(u8, u8)>,
     ) -> Result<(Receiver<MacFrame>, cpal::Stream), Box<dyn std::error::Error>> {
         let config = select_config(device.supported_input_configs()?)?;
 
@@ -184,6 +190,12 @@ impl Athernet {
                                     }
                                     MacFrame::OP_DATA => {
                                         ack_send_sender.send(tag).unwrap();
+                                        sender.send(buffer).unwrap();
+                                    }
+                                    MacFrame::OP_PING_REQ => {
+                                        ping_sender.send(tag).unwrap();
+                                    }
+                                    MacFrame::OP_PING_REPLY => {
                                         sender.send(buffer).unwrap();
                                     }
                                     _ => {}
@@ -216,14 +228,15 @@ impl Athernet {
         let channel_free = Arc::new(AtomicBool::new(true));
         let (ack_send_send, ack_send_recv) = mpsc::channel::<(u8, u8)>();
         let (ack_recv_send, ack_recv_recv) = mpsc::channel::<(u8, u8)>();
+        let (ping_send, ping_recv) = mpsc::channel::<(u8, u8)>();
 
         let (receiver, _output_stream) = Self::create_receive_stream(
             mac_addr, host.default_input_device().ok_or("no input device available!")?,
-            channel_free.clone(), ack_send_send, ack_recv_send,
+            channel_free.clone(), ack_send_send, ack_recv_send, ping_send,
         )?;
         let (sender, _input_stream) = Self::create_send_stream(
             mac_addr, host.default_output_device().ok_or("no output device available!")?,
-            channel_free.clone(), ack_send_recv, ack_recv_recv,
+            channel_free.clone(), ack_send_recv, ack_recv_recv, ping_recv,
         )?;
 
         Ok(Self { sender, receiver, _input_stream, _output_stream })

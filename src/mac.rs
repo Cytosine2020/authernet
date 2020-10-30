@@ -48,34 +48,87 @@ impl MacFrame {
     pub const OP_ACK: u8 = 0b1111;
 
     #[inline]
-    pub fn wrap(src: u8, dest: u8, op: u8, tag: u8, data: &DataPack) -> Self {
-        let mut inner = [0u8; MAC_FRAME_MAX];
+    pub fn new() -> Self { Self { inner: [0u8; MAC_FRAME_MAX] } }
 
-        inner[Self::SRC_INDEX] = src;
-        inner[Self::DEST_INDEX] = dest;
-        inner[Self::OP_INDEX] = op;
-        inner[Self::TAG_INDEX] = tag;
-        inner[Self::MAC_DATA_SIZE..][..DATA_PACK_MAX].copy_from_slice(data);
-
-        let mut ret = Self { inner };
-
-        let size = ret.get_size();
-
-        ret.inner[size] = crc_calculate(ret.inner[..size].iter().cloned());
-
-        ret
+    #[inline]
+    fn set_src(&mut self, val: u8) -> &mut Self {
+        self.inner[Self::SRC_INDEX] = val;
+        self
     }
 
+    #[inline]
+    fn set_dest(&mut self, val: u8) -> &mut Self {
+        self.inner[Self::DEST_INDEX] = val;
+        self
+    }
+
+    #[inline]
+    fn set_op(&mut self, val: u8) -> &mut Self {
+        self.inner[Self::OP_INDEX] = val;
+        self
+    }
+
+    #[inline]
+    fn set_tag(&mut self, val: u8) -> &mut Self {
+        self.inner[Self::TAG_INDEX] = val;
+        self
+    }
+
+    #[inline]
+    fn set_pay_load(&mut self, data: &DataPack) -> &mut Self {
+        let size = data[0] as usize + 1;
+        self.inner[Self::MAC_DATA_SIZE..][..size].copy_from_slice(&data[..size]);
+        self
+    }
+
+    #[inline]
+    fn generate_crc(&mut self) -> &mut Self {
+        let size = self.get_size();
+        self.inner[size] = crc_calculate(self.inner[..size].iter().cloned());
+        self
+    }
+
+    #[inline]
+    pub fn wrap(src: u8, dest: u8, op: u8, tag: u8, data: &DataPack) -> Self {
+        let mut result = Self::new();
+
+        result
+            .set_src(src)
+            .set_dest(dest)
+            .set_op(op)
+            .set_tag(tag)
+            .set_pay_load(data)
+            .generate_crc();
+
+        result
+    }
+
+    #[inline]
     pub fn new_ack(src: u8, dest: u8, tag: u8) -> Self {
-        let mut inner = [0u8; MAC_FRAME_MAX];
+        let mut result = Self::new();
 
-        inner[Self::SRC_INDEX] = src;
-        inner[Self::DEST_INDEX] = dest;
-        inner[Self::OP_INDEX] = Self::OP_ACK;
-        inner[Self::TAG_INDEX] = tag;
-        inner[Self::MAC_DATA_SIZE] = crc_calculate(inner[..Self::MAC_DATA_SIZE].iter().cloned());
+        result
+            .set_src(src)
+            .set_dest(dest)
+            .set_op(Self::OP_ACK)
+            .set_tag(tag)
+            .generate_crc();
 
-        Self { inner }
+        result
+    }
+
+    #[inline]
+    pub fn new_ping_reply(src: u8, dest: u8, tag: u8) -> Self {
+        let mut result = Self::new();
+
+        result
+            .set_src(src)
+            .set_dest(dest)
+            .set_op(Self::OP_PING_REPLY)
+            .set_tag(tag)
+            .generate_crc();
+
+        result
     }
 
     #[inline]
@@ -106,14 +159,13 @@ impl MacFrame {
     pub fn get_tag(&self) -> u8 { self.inner[Self::TAG_INDEX] }
 
     #[inline]
-    pub fn to_broadcast(&self) -> bool {
-        self.get_dest() == MacFrame::BROADCAST_MAC
-    }
+    pub fn to_broadcast(&self) -> bool { self.get_dest() == MacFrame::BROADCAST_MAC }
 
     #[inline]
-    pub fn is_ack(&self) -> bool {
-        self.get_op() == MacFrame::OP_ACK
-    }
+    pub fn is_ack(&self) -> bool { self.get_op() == MacFrame::OP_ACK }
+
+    #[inline]
+    pub fn is_data(&self) -> bool { self.get_op() == MacFrame::OP_DATA }
 
     #[inline]
     pub fn check(&self, mac_addr: u8) -> bool {
