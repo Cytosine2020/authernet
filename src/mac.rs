@@ -14,32 +14,18 @@ lazy_static!(
     static ref CRC_TABLE: [u8; 256] = {
         let mut table = [0; 256];
 
-        for i in 0..0xFFu8 {
-            let mut crc = i;
-
-            for _ in 0..=8 {
-                if (crc & 0x80) > 0 {
-                    crc = (crc << 1) ^ 0x31;
-                } else {
-                    crc <<= 1;
-                }
-            }
-            table[i as usize] = crc;
+        for i in 0..256 {
+            table[i] = (0..=8).fold(i as u8, |crc, _| {
+                (crc << 1) ^ if (crc & 0x80) > 0 { 0x31 } else { 0 }
+            });
         }
 
         table
     };
 );
 
-fn crc_calculate(data: &[u8]) -> u8 {
-    let mut crc = 0;
-
-    for byte in data.iter() {
-        crc = crc ^ *byte;
-        crc = CRC_TABLE[crc as usize];
-    }
-
-    crc
+fn crc_calculate<I: Iterator<Item=u8>>(iter: I) -> u8 {
+    iter.fold(0, |crc, byte| CRC_TABLE[(crc ^ byte) as usize])
 }
 
 #[derive(Copy, Clone)]
@@ -75,7 +61,7 @@ impl MacFrame {
 
         let size = ret.get_size();
 
-        ret.inner[size] = crc_calculate(&ret.inner[..size]);
+        ret.inner[size] = crc_calculate(ret.inner[..size].iter().cloned());
 
         ret
     }
@@ -87,7 +73,7 @@ impl MacFrame {
         inner[Self::DEST_INDEX] = dest;
         inner[Self::OP_INDEX] = Self::OP_ACK;
         inner[Self::TAG_INDEX] = tag;
-        inner[Self::MAC_DATA_SIZE] = crc_calculate(&inner[..Self::MAC_DATA_SIZE]);
+        inner[Self::MAC_DATA_SIZE] = crc_calculate(inner[..Self::MAC_DATA_SIZE].iter().cloned());
 
         Self { inner }
     }
@@ -131,7 +117,7 @@ impl MacFrame {
 
     #[inline]
     pub fn check(&self, mac_addr: u8) -> bool {
-        crc_calculate(&self.inner[..self.get_size() + CRC_SIZE]) == 0 &&
+        crc_calculate(self.inner[..self.get_size() + CRC_SIZE].iter().cloned()) == 0 &&
             (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
     }
 
@@ -164,13 +150,13 @@ impl MacLayer {
     }
 
     pub fn send(&mut self, data: &DataPack) -> Result<(), Box<dyn std::error::Error>> {
-        let dest = self.dest as usize;
+        let send_tag = &mut self.send_tag[self.dest as usize];
 
         let tag = if self.dest == MacFrame::BROADCAST_MAC {
             0
         } else {
-            let tag = self.send_tag[dest];
-            self.send_tag[dest] = self.send_tag[dest].wrapping_add(1);
+            let tag = *send_tag;
+            *send_tag = send_tag.wrapping_add(1);
             tag
         };
 
@@ -184,11 +170,11 @@ impl MacLayer {
             let mac_data = self.athernet.recv()?;
             let src = mac_data.get_src();
             let tag = mac_data.get_tag();
+            let recv_tag = &mut self.recv_tag[src as usize];
 
-            if src == self.dest && self.recv_tag[src as usize] == tag {
-                self.recv_tag[src as usize] = self.recv_tag[src as usize].wrapping_add(1);
-
-                return Ok(mac_data.unwrap())
+            if (src, tag) == (self.dest, *recv_tag) {
+                *recv_tag = recv_tag.wrapping_add(1);
+                return Ok(mac_data.unwrap());
             }
         }
     }

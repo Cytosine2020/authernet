@@ -7,12 +7,12 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use rand::{Rng, thread_rng};
-use crate::{mac::MacFrame, module::{Demodulator, Modulator}};
+use crate::{mac::MacFrame, module::{Demodulator, modulate}};
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const ACK_TIMEOUT: usize = 10000;
-const BACK_OFF_WINDOW: usize = 1000;
+const BACK_OFF_WINDOW: usize = 512;
 
 
 fn select_host() -> Host { cpal::default_host() }
@@ -50,8 +50,6 @@ impl Athernet {
     ) -> Result<(Sender<MacFrame>, cpal::Stream), Box<dyn std::error::Error>> {
         let config = select_config(device.supported_output_configs()?)?;
 
-        let modulator = Modulator::new();
-
         let channel = config.channels() as usize;
 
         let (sender, receiver) = mpsc::channel();
@@ -68,7 +66,9 @@ impl Athernet {
             //     _ => {}
             // }
 
-            SendState::Sending(buffer, modulator.iter(buffer).map(move |item| {
+            let iter = std::iter::repeat(0).take(BACK_OFF_WINDOW).chain(modulate(buffer));
+
+            SendState::Sending(buffer, iter.map(move |item| {
                 std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
             }).flatten(), count)
         };
@@ -77,8 +77,8 @@ impl Athernet {
             let tag = (buffer.get_dest(), buffer.get_tag());
 
             if count <= 20 {
-                let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 16) +
-                    1 << std::cmp::min(5, count);
+                let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 4) +
+                    1 << std::cmp::min(4, count);
 
                 // println!("back off {:?}", (tag, back_off));
 
@@ -124,7 +124,7 @@ impl Athernet {
                             };
                         }
                         SendState::Sending(buffer, ref mut iter, count) => {
-                            if buffer.is_ack() || channel_free {
+                            if channel_free || buffer.is_ack() {
                                 if let Some(item) = iter.next() {
                                     value = item;
                                 } else {

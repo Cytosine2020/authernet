@@ -128,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let pack = athernet.recv()?;
                     let data = data_pack_unwrap(&pack);
 
-                    println!("receive {}", data.len());
+                    // println!("receive {}", data.len());
 
                     file.write_all(data)?;
                     count += data.len() as u64;

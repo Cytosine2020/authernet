@@ -4,10 +4,11 @@ use crate::mac::{MAC_FRAME_MAX, CRC_SIZE, MacFrame, MacFrameRaw};
 
 
 const SYMBOL_LEN: usize = 5;
+const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
 lazy_static!(
-    pub static ref CARRIER: [i16; SYMBOL_LEN] = {
+    static ref CARRIER: [i16; SYMBOL_LEN] = {
         let mut carrier = [0i16; SYMBOL_LEN];
 
         const ZERO: f32 = SYMBOL_LEN as f32 / 2. - 0.5;
@@ -15,11 +16,7 @@ lazy_static!(
         for i in 0..SYMBOL_LEN {
             let t = (i as f32 - ZERO) * std::f32::consts::PI * 2. / SYMBOL_LEN as f32;
 
-            let sinc = if t.abs() < 1e-6 {
-                1.
-            } else {
-                t.sin() / t
-            };
+            let sinc = if t.abs() < 1e-6 { 1. } else { t.sin() / t };
 
             carrier[i] = (sinc * std::i16::MAX as f32) as i16;
         }
@@ -29,9 +26,6 @@ lazy_static!(
 );
 
 fn carrier() -> impl Iterator<Item=i16> + 'static { CARRIER.iter().cloned() }
-
-
-const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
 pub struct ByteToBitIter<T> {
@@ -78,24 +72,18 @@ fn pulse_shaping<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
     }).flatten()
 }
 
-pub struct Modulator {}
+pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
+    let size = buffer.get_size() + 1;
+    let raw = buffer.into_raw();
 
-impl Modulator {
-    pub fn new() -> Self { Self {} }
-
-    pub fn iter(&self, buffer: MacFrame) -> impl Iterator<Item=i16> {
-        let size = buffer.get_size() + 1;
-        let raw = buffer.into_raw();
-
-        pulse_shaping(BARKER.iter().cloned().chain(ByteToBitIter::from(
-            (0..size).map(move |index| raw[index])
-        )))
-    }
+    pulse_shaping(BARKER.iter().cloned().chain(ByteToBitIter::from(
+        (0..size).map(move |index| raw[index])
+    )))
 }
 
 
 #[derive(Copy, Clone)]
-pub struct BitReceive {
+struct BitReceive {
     inner: MacFrameRaw,
     count: usize,
 }
@@ -112,13 +100,11 @@ impl BitReceive {
         if self.count <= (MacFrame::MAC_DATA_SIZE + 1) * 8 {
             None
         } else {
-            let mut size = if self.inner[MacFrame::OP_INDEX] == MacFrame::OP_ACK {
+            let size = if self.inner[MacFrame::OP_INDEX] == MacFrame::OP_ACK {
                 0
             } else {
                 self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1
-            };
-
-            size += MacFrame::MAC_DATA_SIZE + CRC_SIZE;
+            } + MacFrame::MAC_DATA_SIZE + CRC_SIZE;
 
             if self.count < size * 8 {
                 None
