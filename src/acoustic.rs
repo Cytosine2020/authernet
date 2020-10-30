@@ -11,8 +11,8 @@ use crate::{mac::MacFrame, module::{Demodulator, Modulator}};
 
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
-const ACK_TIMEOUT: usize = 12000;
-const BACK_OFF_WINDOW: usize = 500;
+const ACK_TIMEOUT: usize = 10000;
+const BACK_OFF_WINDOW: usize = 1000;
 
 
 fn select_host() -> Host { cpal::default_host() }
@@ -60,12 +60,11 @@ impl Athernet {
         let mut back_off_buffer = None;
 
         let sending = move |buffer: MacFrame, count| {
-            // let mac_data = MacData::copy_from_slice(&buffer);
-            // let tag = (mac_data.get_dest(), mac_data.get_index());
+            // let tag = (buffer.get_dest(), buffer.get_tag());
             //
-            // match mac_data.get_op() {
-            //     MacData::DATA => println!("sending data {:?}", tag),
-            //     MacData::ACK => println!("sending ack {:?}", tag),
+            // match buffer.get_op() {
+            //     MacFrame::OP_DATA => println!("sending data {:?}", tag),
+            //     MacFrame::OP_ACK => println!("sending ack {:?}", tag),
             //     _ => {}
             // }
 
@@ -79,7 +78,7 @@ impl Athernet {
 
             if count <= 20 {
                 let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 16) +
-                    if count > 5 { 1 << 5 } else { 1 << count };
+                    1 << std::cmp::min(5, count);
 
                 // println!("back off {:?}", (tag, back_off));
 
@@ -121,32 +120,30 @@ impl Athernet {
                                     send_state = sending(buffer, 0);
                                 } else {
                                     send_state = SendState::Idle;
-                                }
+                                };
                             };
                         }
                         SendState::Sending(buffer, ref mut iter, count) => {
-                            if channel_free {
+                            if buffer.is_ack() || channel_free {
                                 if let Some(item) = iter.next() {
                                     value = item;
                                 } else {
-                                    send_state = if buffer.need_ack() {
-                                        SendState::WaitAck(buffer, ACK_TIMEOUT, count)
-                                    } else {
+                                    send_state = if buffer.is_ack() || buffer.to_broadcast() {
                                         SendState::Idle
+                                    } else {
+                                        SendState::WaitAck(buffer, ACK_TIMEOUT, count)
                                     }
                                 }
                             } else {
-                                if buffer.need_back_off() {
-                                    back_off_buffer = back_off(buffer, count);
-                                }
+                                back_off_buffer = back_off(buffer, count);
                                 send_state = SendState::Idle;
-                            }
+                            };
                         }
                         SendState::WaitAck(buffer, ref mut time, count) => {
                             if *time > 0 {
-                                let tag = (buffer.get_dest(), buffer.get_tag());
-
-                                if ack_recv.iter().any(|item| *item == tag) {
+                                if ack_recv.iter().any(|item| {
+                                    *item == (buffer.get_dest(), buffer.get_tag())
+                                }) {
                                     send_state = SendState::Idle;
                                 } else {
                                     *time -= 1;
@@ -234,19 +231,19 @@ impl Athernet {
     }
 
     pub fn new(mac_addr: u8) -> Result<Self, Box<dyn std::error::Error>> {
-        let channel_free = Arc::new(AtomicBool::new(true));
         let host = select_host();
 
-        let (ack_send_sender, ack_send_receiver) = mpsc::channel::<(u8, u8)>();
-        let (ack_recv_sender, ack_recv_receiver) = mpsc::channel::<(u8, u8)>();
+        let channel_free = Arc::new(AtomicBool::new(true));
+        let (ack_send_send, ack_send_recv) = mpsc::channel::<(u8, u8)>();
+        let (ack_recv_send, ack_recv_recv) = mpsc::channel::<(u8, u8)>();
 
         let (receiver, _output_stream) = Self::create_receive_stream(
-            mac_addr.clone(), host.default_input_device().ok_or("no input device available!")?,
-            channel_free.clone(), ack_send_sender, ack_recv_sender,
+            mac_addr, host.default_input_device().ok_or("no input device available!")?,
+            channel_free.clone(), ack_send_send, ack_recv_send,
         )?;
         let (sender, _input_stream) = Self::create_send_stream(
             mac_addr, host.default_output_device().ok_or("no output device available!")?,
-            channel_free.clone(), ack_send_receiver, ack_recv_receiver,
+            channel_free.clone(), ack_send_recv, ack_recv_recv,
         )?;
 
         Ok(Self { sender, receiver, _input_stream, _output_stream })

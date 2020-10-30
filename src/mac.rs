@@ -100,7 +100,7 @@ impl MacFrame {
 
     #[inline]
     pub fn get_size(&self) -> usize {
-        Self::MAC_DATA_SIZE + if self.get_op() == Self::OP_ACK {
+        Self::MAC_DATA_SIZE + if self.is_ack() {
             0
         } else {
             self.inner[Self::MAC_DATA_SIZE] as usize + 1
@@ -120,13 +120,13 @@ impl MacFrame {
     pub fn get_tag(&self) -> u8 { self.inner[Self::TAG_INDEX] }
 
     #[inline]
-    pub fn need_ack(&self) -> bool {
-        self.get_op() == MacFrame::OP_DATA && self.get_dest() != MacFrame::BROADCAST_MAC
+    pub fn to_broadcast(&self) -> bool {
+        self.get_dest() == MacFrame::BROADCAST_MAC
     }
 
     #[inline]
-    pub fn need_back_off(&self) -> bool {
-        self.get_op() == MacFrame::OP_DATA
+    pub fn is_ack(&self) -> bool {
+        self.get_op() == MacFrame::OP_ACK
     }
 
     #[inline]
@@ -138,7 +138,7 @@ impl MacFrame {
     #[inline]
     pub fn unwrap(&self) -> DataPack {
         let mut data_pack = [0u8; DATA_PACK_MAX];
-        let size = self.get_size();
+        let size = self.get_size() - Self::MAC_DATA_SIZE;
         data_pack[..size].copy_from_slice(&self.inner[Self::MAC_DATA_SIZE..][..size]);
         data_pack
     }

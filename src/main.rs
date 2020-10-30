@@ -28,7 +28,7 @@ impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut ret = [0; DATA_PACK_MAX];
-        let mut size = DATA_PACK_MAX;
+        let mut size = DATA_PACK_MAX - 1;
 
         for i in 0..DATA_PACK_MAX - 1 {
             if let Some(byte) = self.iter.next() {
@@ -127,6 +127,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 while count < size {
                     let pack = athernet.recv()?;
                     let data = data_pack_unwrap(&pack);
+
+                    println!("receive {}", data.len());
 
                     file.write_all(data)?;
                     count += data.len() as u64;
