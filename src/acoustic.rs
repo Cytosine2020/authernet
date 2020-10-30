@@ -55,17 +55,9 @@ impl Athernet {
         let (sender, receiver) = mpsc::channel();
 
         let mut send_state = SendState::Idle;
-        let mut back_off_buffer = None;
+        let mut back_off_buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |buffer: MacFrame, count| {
-            // let tag = (buffer.get_dest(), buffer.get_tag());
-            //
-            // match buffer.get_op() {
-            //     MacFrame::OP_DATA => println!("sending data {:?}", tag),
-            //     MacFrame::OP_ACK => println!("sending ack {:?}", tag),
-            //     _ => {}
-            // }
-
             let iter = std::iter::repeat(0).take(BACK_OFF_WINDOW).chain(modulate(buffer));
 
             SendState::Sending(buffer, iter.map(move |item| {
@@ -74,17 +66,12 @@ impl Athernet {
         };
 
         let back_off = move |buffer: MacFrame, count: usize| {
-            let tag = (buffer.get_dest(), buffer.get_tag());
-
             if count <= 20 {
                 let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 4) +
                     1 << std::cmp::min(4, count);
-
-                // println!("back off {:?}", (tag, back_off));
-
                 Some((buffer, back_off * BACK_OFF_WINDOW, count))
             } else {
-                println!("package loss {:?}", tag);
+                // println!("package loss {:?}", (buffer.get_dest(), buffer.get_tag()));
 
                 None
             }
@@ -99,12 +86,12 @@ impl Athernet {
                 let mut ack_send = ack_send_receiver.try_iter().collect::<Vec<_>>()
                     .into_iter();
 
+                if let Some((_, ref mut time, _)) = back_off_buffer {
+                    *time = time.saturating_sub(data.len());
+                }
+
                 for sample in data.iter_mut() {
                     let mut value = 0;
-
-                    if let Some((_, ref mut time, _)) = back_off_buffer {
-                        if *time > 0 { *time -= 1 }
-                    }
 
                     match send_state {
                         SendState::Idle => {
@@ -118,8 +105,6 @@ impl Athernet {
                                     }
                                 } else if let Some(buffer) = receiver.try_iter().next() {
                                     send_state = sending(buffer, 0);
-                                } else {
-                                    send_state = SendState::Idle;
                                 };
                             };
                         }
@@ -195,15 +180,10 @@ impl Athernet {
                                 let tag = (buffer.get_src(), buffer.get_tag());
                                 match buffer.get_op() {
                                     MacFrame::OP_ACK => {
-                                        // println!("receive ack {:?}", tag);
-
                                         ack_recv_sender.send(tag).unwrap();
                                     }
                                     MacFrame::OP_DATA => {
-                                        // println!("receive data {:?}", tag);
-
                                         ack_send_sender.send(tag).unwrap();
-
                                         sender.send(buffer).unwrap();
                                     }
                                     _ => {}
