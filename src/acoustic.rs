@@ -59,23 +59,23 @@ impl Athernet {
         let (sender, receiver) = mpsc::channel();
 
         let mut send_state = SendState::Idle;
-        let mut back_off_buffer: Option<(MacFrame, usize, usize)> = None;
+        let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
-        let sending = move |buffer: MacFrame, count| {
-            let iter = std::iter::repeat(0).take(DIFS).chain(modulate(buffer));
+        let sending = move |frame: MacFrame, count| {
+            let iter = std::iter::repeat(0).take(DIFS).chain(modulate(frame));
 
-            SendState::Sending(buffer, iter.map(move |item| {
+            SendState::Sending(frame, iter.map(move |item| {
                 std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
             }).flatten(), count)
         };
 
-        let back_off = move |buffer: MacFrame, count: usize| {
+        let back_off = move |frame: MacFrame, count: usize| {
             if count <= 20 {
                 let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 4) +
                     1 << std::cmp::min(4, count);
-                Some((buffer, back_off * BACK_OFF_WINDOW, count))
+                Some((frame, back_off * BACK_OFF_WINDOW, count))
             } else {
-                // println!("package loss {:?}", (buffer.get_dest(), buffer.get_tag()));
+                println!("package loss {:?}", (frame.get_dest(), frame.get_tag()));
 
                 None
             }
@@ -89,7 +89,7 @@ impl Athernet {
             move |data: &mut [f32], _| {
                 let channel_free = guard.load(Ordering::SeqCst);
 
-                if let Some((_, ref mut time, _)) = back_off_buffer {
+                if let Some((_, ref mut time, _)) = buffer {
                     *time = time.saturating_sub(data.len());
                 }
 
@@ -106,50 +106,52 @@ impl Athernet {
                         SendState::Idle => {
                             if channel_free {
                                 if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
-                                    send_state = sending(MacFrame::new_ack(mac_addr, dest, tag), 0);
+                                    let frame = MacFrame::new_ack(mac_addr, dest, tag);
+                                    send_state = sending(frame, 0);
                                 } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
-                                    send_state = sending(MacFrame::new_ping_reply(mac_addr, dest, tag), 0)
-                                } else if let Some((buffer, time, count)) = back_off_buffer {
+                                    let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
+                                    send_state = sending(frame, 0);
+                                } else if let Some((frame, time, count)) = buffer {
                                     if time == 0 {
-                                        back_off_buffer = None;
-                                        send_state = sending(buffer, count + 1);
+                                        buffer = None;
+                                        send_state = sending(frame, count + 1);
                                     }
-                                } else if let Some(buffer) = receiver.try_iter().next() {
-                                    send_state = sending(buffer, 0);
+                                } else if let Some(frame) = receiver.try_iter().next() {
+                                    send_state = sending(frame, 0);
                                 } else {
                                     break;
                                 };
                             };
                         }
-                        SendState::Sending(buffer, ref mut iter, count) => {
-                            if channel_free || !buffer.is_data() {
+                        SendState::Sending(frame, ref mut iter, count) => {
+                            if channel_free || !frame.is_data() {
                                 if let Some(item) = iter.next() {
                                     *sample = Sample::from(&item);
                                 } else {
-                                    send_state = if buffer.is_data() && !buffer.to_broadcast() {
-                                        SendState::WaitAck(buffer, ACK_TIMEOUT, count)
+                                    send_state = if frame.is_data() && !frame.to_broadcast() {
+                                        SendState::WaitAck(frame, ACK_TIMEOUT, count)
                                     } else {
                                         SendState::Idle
                                     }
                                 }
                             } else {
-                                back_off_buffer = back_off(buffer, count);
+                                buffer = back_off(frame, count);
                                 send_state = SendState::Idle;
                             };
                         }
-                        SendState::WaitAck(buffer, ref mut time, count) => {
+                        SendState::WaitAck(frame, ref mut time, count) => {
                             if *time > 0 {
                                 if ack_recv_receiver.try_iter().any(|item| {
-                                    item == (buffer.get_dest(), buffer.get_tag())
+                                    item == (frame.get_dest(), frame.get_tag())
                                 }) {
-                                    bit_count += buffer.get_payload_size() * 8;
+                                    bit_count += frame.get_payload_size() * 8;
 
                                     send_state = SendState::Idle;
                                 } else {
                                     break;
                                 };
                             } else {
-                                back_off_buffer = back_off(buffer, count);
+                                buffer = back_off(frame, count);
                                 send_state = SendState::Idle;
                             };
                         }
@@ -158,7 +160,7 @@ impl Athernet {
 
                 if time.elapsed().unwrap() > std::time::Duration::from_secs(1) && perf {
                     time = std::time::SystemTime::now();
-                    println!("speed {}", bit_count);
+                    println!("speed {} b/s", bit_count);
                     bit_count = 0;
                 }
             },
@@ -197,16 +199,16 @@ impl Athernet {
             move |data: &[f32], _| {
                 for sample in data.iter() {
                     if channel == 0 {
-                        if let Some(buffer) = demodulator.push_back(Sample::from(sample)) {
-                            if buffer.check(mac_addr) {
-                                let tag = (buffer.get_src(), buffer.get_tag());
-                                match buffer.get_op() {
+                        if let Some(frame) = demodulator.push_back(Sample::from(sample)) {
+                            if frame.check(mac_addr) {
+                                let tag = (frame.get_src(), frame.get_tag());
+                                match frame.get_op() {
                                     MacFrame::OP_ACK => {
                                         ack_recv_sender.send(tag).unwrap();
                                     }
                                     MacFrame::OP_DATA => {
                                         ack_send_sender.send(tag).unwrap();
-                                        sender.send(buffer).unwrap();
+                                        sender.send(frame).unwrap();
                                     }
                                     MacFrame::OP_PING_REQ => {
                                         ping_sender.send(tag).unwrap();
