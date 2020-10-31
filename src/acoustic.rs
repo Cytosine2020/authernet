@@ -105,11 +105,11 @@ impl Athernet {
                     match send_state {
                         SendState::Idle => {
                             if channel_free {
-                                if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
-                                    let frame = MacFrame::new_ack(mac_addr, dest, tag);
-                                    send_state = sending(frame, 0);
-                                } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
+                                if let Some((dest, tag)) = ping_receiver.try_iter().next() {
                                     let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
+                                    send_state = sending(frame, 0);
+                                } else if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
+                                    let frame = MacFrame::new_ack(mac_addr, dest, tag);
                                     send_state = sending(frame, 0);
                                 } else if let Some((frame, time, count)) = buffer {
                                     if time == 0 {
