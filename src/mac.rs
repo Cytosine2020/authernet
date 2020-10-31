@@ -118,6 +118,20 @@ impl MacFrame {
     }
 
     #[inline]
+    pub fn new_ping_request(src: u8, dest: u8, tag: u8) -> Self {
+        let mut result = Self::new();
+
+        result
+            .set_src(src)
+            .set_dest(dest)
+            .set_op(Self::OP_PING_REQ)
+            .set_tag(tag)
+            .generate_crc();
+
+        result
+    }
+
+    #[inline]
     pub fn new_ping_reply(src: u8, dest: u8, tag: u8) -> Self {
         let mut result = Self::new();
 
@@ -139,10 +153,19 @@ impl MacFrame {
 
     #[inline]
     pub fn get_size(&self) -> usize {
-        Self::MAC_DATA_SIZE + if self.is_ack() {
-            0
-        } else {
+        Self::MAC_DATA_SIZE + if self.is_data() {
             self.inner[Self::MAC_DATA_SIZE] as usize + 1
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub fn get_payload_size(&self) -> usize {
+        if self.is_data() {
+            self.inner[Self::MAC_DATA_SIZE] as usize
+        } else {
+            0
         }
     }
 
@@ -229,5 +252,29 @@ impl MacLayer {
                 return Ok(mac_data.unwrap());
             }
         }
+    }
+
+    pub fn ping(&mut self, tag: u8)
+                -> Result<Option<std::time::Duration>, Box<dyn std::error::Error>> {
+        let time_out = std::time::Duration::from_secs(2);
+
+        let start = std::time::SystemTime::now();
+
+        self.athernet.send(MacFrame::new_ping_request(self.mac_addr, self.dest, tag))?;
+
+        let time = match self.athernet.ping_recv_timeout(time_out) {
+            Ok(pair) => {
+                if pair == (self.dest, tag) {
+                    Some(start.elapsed()?)
+                } else {
+                    Err("unexpected reply!")?;
+                    None
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(),
+        };
+
+        Ok(time)
     }
 }

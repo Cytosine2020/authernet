@@ -49,6 +49,7 @@ impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
 enum Command {
     Send(String),
     Recv(String),
+    Ping,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -70,16 +71,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ).into());
             }
 
-            if let Some(arg) = args.next() {
-                match command[1] as char {
-                    's' => commands.push(Command::Send(arg)),
-                    'r' => commands.push(Command::Recv(arg)),
-                    _ => return Err(String::from(
-                        format!("unknown command: {:?}", command_).to_owned()
-                    ).into()),
+            match command[1] as char {
+                'p' => commands.push(Command::Ping),
+                _ => {
+                    if let Some(arg) = args.next() {
+                        match command[1] as char {
+                            's' => commands.push(Command::Send(arg)),
+                            'r' => commands.push(Command::Recv(arg)),
+                            _ => return Err(String::from(
+                                format!("unknown command: {:?}", command_).to_owned()
+                            ).into()),
+                        }
+                    } else {
+                        Err(format!("command {:?} need parameter!", command))?;
+                    }
                 }
-            } else {
-                break;
             }
         } else {
             break;
@@ -137,6 +143,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::thread::sleep(std::time::Duration::from_millis(100));
 
                 println!("receive {}", count);
+            }
+            Command::Ping => {
+                for tag in 0..=255u8 {
+                    println!("ping {}: {:?}", tag, athernet.ping(tag)?);
+                }
             }
         }
     }

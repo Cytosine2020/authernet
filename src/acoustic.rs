@@ -1,6 +1,6 @@
 use std::sync::{
     Arc, atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver, RecvError, Sender, SendError},
+    mpsc::{self, Receiver, RecvError, Sender, SendError, RecvTimeoutError},
 };
 use cpal::{
     Device, Host, Sample, SupportedStreamConfig, SupportedStreamConfigRange,
@@ -37,6 +37,7 @@ enum SendState<I> {
 pub struct Athernet {
     sender: Sender<MacFrame>,
     receiver: Receiver<MacFrame>,
+    ping_receiver: Receiver<(u8, u8)>,
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
 }
@@ -78,6 +79,9 @@ impl Athernet {
                 None
             }
         };
+
+        let mut bit_count = 0;
+        let mut time = std::time::SystemTime::now();
 
         let stream = device.build_output_stream(
             &config.into(),
@@ -137,6 +141,8 @@ impl Athernet {
                                 if ack_recv_receiver.try_iter().any(|item| {
                                     item == (buffer.get_dest(), buffer.get_tag())
                                 }) {
+                                    bit_count += buffer.get_payload_size() * 8;
+
                                     send_state = SendState::Idle;
                                 } else {
                                     break;
@@ -146,7 +152,13 @@ impl Athernet {
                                 send_state = SendState::Idle;
                             };
                         }
-                    }
+                    };
+                };
+
+                if time.elapsed().unwrap() > std::time::Duration::from_secs(1) {
+                    time = std::time::SystemTime::now();
+                    println!("speed {}", bit_count);
+                    bit_count = 0;
                 }
             },
             |err| {
@@ -165,7 +177,8 @@ impl Athernet {
         ack_send_sender: Sender<(u8, u8)>,
         ack_recv_sender: Sender<(u8, u8)>,
         ping_sender: Sender<(u8, u8)>,
-    ) -> Result<(Receiver<MacFrame>, cpal::Stream), Box<dyn std::error::Error>> {
+    ) -> Result<(Receiver<MacFrame>, Receiver<(u8, u8)>, cpal::Stream), Box<dyn std::error::Error>>
+    {
         let config = select_config(device.supported_input_configs()?)?;
 
         let mut demodulator = Demodulator::new();
@@ -173,6 +186,7 @@ impl Athernet {
         let channel_count = config.channels() as usize;
 
         let (sender, receiver) = mpsc::channel();
+        let (ping_send, ping_recv) = mpsc::channel();
 
         let mut channel = 0;
         let mut channel_active = false;
@@ -197,7 +211,7 @@ impl Athernet {
                                         ping_sender.send(tag).unwrap();
                                     }
                                     MacFrame::OP_PING_REPLY => {
-                                        sender.send(buffer).unwrap();
+                                        ping_send.send(tag).unwrap();
                                     }
                                     _ => {}
                                 }
@@ -220,7 +234,7 @@ impl Athernet {
 
         stream.play()?;
 
-        Ok((receiver, stream))
+        Ok((receiver, ping_recv, stream))
     }
 
     pub fn new(mac_addr: u8) -> Result<Self, Box<dyn std::error::Error>> {
@@ -231,7 +245,8 @@ impl Athernet {
         let (ack_recv_send, ack_recv_recv) = mpsc::channel::<(u8, u8)>();
         let (ping_send, ping_recv) = mpsc::channel::<(u8, u8)>();
 
-        let (receiver, _output_stream) = Self::create_receive_stream(
+        let (receiver, ping_receiver, _output_stream)
+            = Self::create_receive_stream(
             mac_addr, host.default_input_device().ok_or("no input device available!")?,
             channel_free.clone(), ack_send_send, ack_recv_send, ping_send,
         )?;
@@ -240,7 +255,7 @@ impl Athernet {
             channel_free.clone(), ack_send_recv, ack_recv_recv, ping_recv,
         )?;
 
-        Ok(Self { sender, receiver, _input_stream, _output_stream })
+        Ok(Self { sender, receiver, ping_receiver, _input_stream, _output_stream })
     }
 
     pub fn send(&self, data: MacFrame) -> Result<(), SendError<MacFrame>> {
@@ -248,4 +263,10 @@ impl Athernet {
     }
 
     pub fn recv(&self) -> Result<MacFrame, RecvError> { self.receiver.recv() }
+
+    pub fn ping_recv_timeout(&self, timeout: std::time::Duration)
+                             -> Result<(u8, u8), RecvTimeoutError>
+    {
+        self.ping_receiver.recv_timeout(timeout)
+    }
 }
