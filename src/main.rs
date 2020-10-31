@@ -61,6 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dest = args.next().unwrap().parse::<u8>()?;
     let mut commands = Vec::new();
     let mut perf = false;
+    let mut wait = 0;
 
     loop {
         if let Some(command_) = args.next() {
@@ -80,6 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match command[1] as char {
                             's' => commands.push(Command::Send(arg)),
                             'r' => commands.push(Command::Recv(arg)),
+                            'w' => wait = arg.parse::<u64>()?,
                             _ => return Err(String::from(
                                 format!("unknown command: {:?}", command_).to_owned()
                             ).into()),
@@ -154,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    std::thread::sleep(std::time::Duration::from_secs(wait));
 
     Ok(())
 }
