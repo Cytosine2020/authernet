@@ -60,6 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let src = args.next().unwrap().parse::<u8>()?;
     let dest = args.next().unwrap().parse::<u8>()?;
     let mut commands = Vec::new();
+    let mut perf = false;
 
     loop {
         if let Some(command_) = args.next() {
@@ -73,6 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             match command[1] as char {
                 'p' => commands.push(Command::Ping),
+                'e' => perf = true,
                 _ => {
                     if let Some(arg) = args.next() {
                         match command[1] as char {
@@ -92,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut athernet = MacLayer::new(src, dest)?;
+    let mut athernet = MacLayer::new(src, dest, perf)?;
 
     for command in commands {
         match command {

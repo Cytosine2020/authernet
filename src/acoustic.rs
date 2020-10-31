@@ -12,7 +12,7 @@ use crate::{mac::MacFrame, module::{Demodulator, modulate}};
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const ACK_TIMEOUT: usize = 10000;
-const BACK_OFF_WINDOW: usize = 256;
+const BACK_OFF_WINDOW: usize = 128;
 const DIFS: usize = 512;
 
 
@@ -50,6 +50,7 @@ impl Athernet {
         ack_send_receiver: Receiver<(u8, u8)>,
         ack_recv_receiver: Receiver<(u8, u8)>,
         ping_receiver: Receiver<(u8, u8)>,
+        perf: bool,
     ) -> Result<(Sender<MacFrame>, cpal::Stream), Box<dyn std::error::Error>> {
         let config = select_config(device.supported_output_configs()?)?;
 
@@ -155,7 +156,7 @@ impl Athernet {
                     };
                 };
 
-                if time.elapsed().unwrap() > std::time::Duration::from_secs(1) {
+                if time.elapsed().unwrap() > std::time::Duration::from_secs(1) && perf {
                     time = std::time::SystemTime::now();
                     println!("speed {}", bit_count);
                     bit_count = 0;
@@ -237,7 +238,7 @@ impl Athernet {
         Ok((receiver, ping_recv, stream))
     }
 
-    pub fn new(mac_addr: u8) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(mac_addr: u8, perf: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let host = select_host();
 
         let channel_free = Arc::new(AtomicBool::new(true));
@@ -252,7 +253,7 @@ impl Athernet {
         )?;
         let (sender, _input_stream) = Self::create_send_stream(
             mac_addr, host.default_output_device().ok_or("no output device available!")?,
-            channel_free.clone(), ack_send_recv, ack_recv_recv, ping_recv,
+            channel_free.clone(), ack_send_recv, ack_recv_recv, ping_recv, perf
         )?;
 
         Ok(Self { sender, receiver, ping_receiver, _input_stream, _output_stream })

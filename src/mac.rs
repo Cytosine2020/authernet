@@ -214,9 +214,9 @@ pub struct MacLayer {
 }
 
 impl MacLayer {
-    pub fn new(mac_addr: u8, dest: u8) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(mac_addr: u8, dest: u8, perf: bool) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
-            athernet: Athernet::new(mac_addr)?,
+            athernet: Athernet::new(mac_addr, perf)?,
             send_tag: [0; 255],
             recv_tag: [0; 255],
             mac_addr,
