@@ -121,6 +121,8 @@ impl Athernet {
                                 } else {
                                     break;
                                 };
+                            } else {
+                                break;
                             };
                         }
                         SendState::Sending(frame, ref mut iter, count) => {
