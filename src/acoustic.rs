@@ -12,7 +12,8 @@ use crate::{mac::MacFrame, module::{Demodulator, modulate}};
 
 const SAMPLE_RATE: cpal::SampleRate = cpal::SampleRate(48000);
 const ACK_TIMEOUT: usize = 10000;
-const BACK_OFF_WINDOW: usize = 512;
+const BACK_OFF_WINDOW: usize = 256;
+const DIFS: usize = 512;
 
 
 fn select_host() -> Host { cpal::default_host() }
@@ -59,7 +60,7 @@ impl Athernet {
         let mut back_off_buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |buffer: MacFrame, count| {
-            let iter = std::iter::repeat(0).take(BACK_OFF_WINDOW).chain(modulate(buffer));
+            let iter = std::iter::repeat(0).take(DIFS).chain(modulate(buffer));
 
             SendState::Sending(buffer, iter.map(move |item| {
                 std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
@@ -81,22 +82,24 @@ impl Athernet {
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _| {
-                let mut flag = true;
-
                 let channel_free = guard.load(Ordering::SeqCst);
-
-                let ack_recv = ack_recv_receiver.try_iter().collect::<Vec<_>>();
 
                 if let Some((_, ref mut time, _)) = back_off_buffer {
                     *time = time.saturating_sub(data.len());
                 }
 
-                for sample in data.iter_mut() {
-                    let mut value = 0;
+                if let SendState::WaitAck(_, ref mut time, _) = send_state {
+                    *time = time.saturating_sub(data.len());
+                }
 
+                for sample in data.iter_mut() {
+                    *sample = 0.;
+                }
+
+                for sample in data.iter_mut() {
                     match send_state {
                         SendState::Idle => {
-                            if channel_free && flag {
+                            if channel_free {
                                 if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
                                     send_state = sending(MacFrame::new_ack(mac_addr, dest, tag), 0);
                                 } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
@@ -108,17 +111,17 @@ impl Athernet {
                                     }
                                 } else if let Some(buffer) = receiver.try_iter().next() {
                                     send_state = sending(buffer, 0);
+                                } else {
+                                    break;
                                 };
-
-                                flag = false;
                             };
                         }
                         SendState::Sending(buffer, ref mut iter, count) => {
                             if channel_free || !buffer.is_data() {
                                 if let Some(item) = iter.next() {
-                                    value = item;
+                                    *sample = Sample::from(&item);
                                 } else {
-                                    send_state = if !buffer.is_data() && !buffer.to_broadcast() {
+                                    send_state = if buffer.is_data() && !buffer.to_broadcast() {
                                         SendState::WaitAck(buffer, ACK_TIMEOUT, count)
                                     } else {
                                         SendState::Idle
@@ -131,21 +134,19 @@ impl Athernet {
                         }
                         SendState::WaitAck(buffer, ref mut time, count) => {
                             if *time > 0 {
-                                if ack_recv.iter().any(|item| {
-                                    *item == (buffer.get_dest(), buffer.get_tag())
+                                if ack_recv_receiver.try_iter().any(|item| {
+                                    item == (buffer.get_dest(), buffer.get_tag())
                                 }) {
                                     send_state = SendState::Idle;
                                 } else {
-                                    *time -= 1;
-                                }
+                                    break;
+                                };
                             } else {
                                 back_off_buffer = back_off(buffer, count);
                                 send_state = SendState::Idle;
                             };
                         }
                     }
-
-                    *sample = Sample::from(&value);
                 }
             },
             |err| {
