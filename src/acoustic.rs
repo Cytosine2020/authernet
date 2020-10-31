@@ -70,15 +70,15 @@ impl Athernet {
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
-            if count <= 20 {
+            // if count <= 20 {
                 let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 4) +
                     1 << std::cmp::min(4, count);
                 Some((frame, back_off * BACK_OFF_WINDOW, count))
-            } else {
-                println!("package loss {:?}", (frame.get_dest(), frame.get_tag()));
-
-                None
-            }
+            // } else {
+            //     println!("package loss {:?}", (frame.get_dest(), frame.get_tag()));
+            //
+            //     None
+            // }
         };
 
         let mut bit_count = 0;
@@ -104,14 +104,14 @@ impl Athernet {
                 for sample in data.iter_mut() {
                     match send_state {
                         SendState::Idle => {
-                            if channel_free {
-                                if let Some((dest, tag)) = ping_receiver.try_iter().next() {
-                                    let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
-                                    send_state = sending(frame, 0);
-                                } else if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
-                                    let frame = MacFrame::new_ack(mac_addr, dest, tag);
-                                    send_state = sending(frame, 0);
-                                } else if let Some((frame, time, count)) = buffer {
+                            if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
+                                let frame = MacFrame::new_ack(mac_addr, dest, tag);
+                                send_state = sending(frame, 0);
+                            } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
+                                let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
+                                send_state = sending(frame, 0);
+                            } else if channel_free {
+                                if let Some((frame, time, count)) = buffer {
                                     if time == 0 {
                                         buffer = None;
                                         send_state = sending(frame, count + 1);
@@ -160,7 +160,7 @@ impl Athernet {
                     };
                 };
 
-                if time.elapsed().unwrap() > std::time::Duration::from_secs(1) && perf {
+                if perf && time.elapsed().unwrap() > std::time::Duration::from_secs(1) {
                     time = std::time::SystemTime::now();
                     println!("speed {} b/s", bit_count);
                     bit_count = 0;
