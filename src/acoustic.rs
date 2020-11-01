@@ -19,7 +19,7 @@ const DIFS: usize = 512;
 #[cfg(target_os = "windows")]
 type SampleType = i16;
 
-#[cfg(target_os = "mac0s")]
+#[cfg(target_os = "macos")]
 type SampleType = f32;
 
 #[cfg(target_os = "windows")]
