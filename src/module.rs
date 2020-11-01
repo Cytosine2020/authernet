@@ -93,7 +93,7 @@ impl BitReceive {
     pub fn new() -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0 } }
 
     #[inline]
-    pub fn push(&mut self, bit: bool) -> Option<MacFrame> {
+    pub fn push(&mut self, bit: bool) -> Option<Option<MacFrame>> {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
 
@@ -106,10 +106,12 @@ impl BitReceive {
                 0
             } + MacFrame::MAC_DATA_SIZE + CRC_SIZE;
 
-            if self.count < size * 8 {
+            if size > MAC_FRAME_MAX {
+                Some(None)
+            } else if self.count < size * 8 {
                 None
             } else {
-                Some(MacFrame::from_raw(self.inner))
+                Some(Some(MacFrame::from_raw(self.inner)))
             }
         }
     }
@@ -198,7 +200,7 @@ impl Demodulator {
                     if let Some(result) = buffer.push(prod > 0) {
                         self.state = DemodulateState::WAITE;
                         self.window.clear();
-                        return Some(result);
+                        return result;
                     }
 
                     DemodulateState::RECEIVE(0, buffer)
