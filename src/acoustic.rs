@@ -241,10 +241,10 @@ impl Athernet {
                             }
                         }
 
-                        if channel_active != demodulator.is_active() {
-                            channel_active = demodulator.is_active();
-                            guard.store(!channel_active, Ordering::SeqCst);
-                        }
+                        // if channel_active != demodulator.is_active() {
+                        //     channel_active = demodulator.is_active();
+                        //     guard.store(!channel_active, Ordering::SeqCst);
+                        // }
                     }
 
                     channel += 1;

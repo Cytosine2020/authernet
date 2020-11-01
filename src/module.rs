@@ -121,8 +121,8 @@ impl BitReceive {
         }
     }
 
-    #[inline]
-    pub fn receiving(&self) -> bool { self.count > 8 }
+    // #[inline]
+    // pub fn receiving(&self) -> bool { self.count > 8 }
 }
 
 enum DemodulateState {
