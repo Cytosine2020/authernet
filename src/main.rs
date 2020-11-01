@@ -151,7 +151,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Command::Ping => {
                 for tag in 0..=255u8 {
                     println!("ping {}: {:?}", tag, athernet.ping(tag)?);
-                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
         }

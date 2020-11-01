@@ -64,6 +64,16 @@ impl Athernet {
         let sending = move |frame: MacFrame, count| {
             let iter = std::iter::repeat(0).take(DIFS).chain(modulate(frame));
 
+            let tag = (frame.get_src(), frame.get_tag());
+
+            match frame.get_op() {
+                MacFrame::OP_ACK => println!("sending ACK {:?}", tag),
+                MacFrame::OP_DATA => println!("sending DATA {:?}", tag),
+                MacFrame::OP_PING_REQ => println!("sending PING REQ {:?}", tag),
+                MacFrame::OP_PING_REPLY => println!("sending RING REPLY {:?}", tag),
+                _ => {}
+            }
+
             SendState::Sending(frame, iter.map(move |item| {
                 std::iter::once(item).chain(std::iter::repeat(0).take(channel - 1))
             }).flatten(), count)
@@ -73,6 +83,9 @@ impl Athernet {
             // if count <= 20 {
                 let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 4) +
                     1 << std::cmp::min(4, count);
+
+            println!("back off {:?}", (frame.get_src(), frame.get_tag(), back_off));
+
                 Some((frame, back_off * BACK_OFF_WINDOW, count))
             // } else {
             //     println!("package loss {:?}", (frame.get_dest(), frame.get_tag()));
@@ -204,19 +217,24 @@ impl Athernet {
                         if let Some(frame) = demodulator.push_back(Sample::from(sample)) {
                             if frame.check(mac_addr) {
                                 let tag = (frame.get_src(), frame.get_tag());
+
                                 match frame.get_op() {
                                     MacFrame::OP_ACK => {
                                         ack_recv_sender.send(tag).unwrap();
+                                        println!("receiving ACK {:?}", tag);
                                     }
                                     MacFrame::OP_DATA => {
                                         ack_send_sender.send(tag).unwrap();
                                         sender.send(frame).unwrap();
+                                        println!("receiving DATA {:?}", tag);
                                     }
                                     MacFrame::OP_PING_REQ => {
                                         ping_sender.send(tag).unwrap();
+                                        println!("receiving PING REQ {:?}", tag);
                                     }
                                     MacFrame::OP_PING_REPLY => {
                                         ping_send.send(tag).unwrap();
+                                        println!("receiving PING REPLY {:?}", tag);
                                     }
                                     _ => {}
                                 }
