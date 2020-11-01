@@ -16,6 +16,18 @@ const BACK_OFF_WINDOW: usize = 128;
 const DIFS: usize = 512;
 
 
+#[cfg(target_os = "windows")]
+type SampleType = i16;
+
+#[cfg(target_os = "mac0s")]
+type SampleType = f32;
+
+#[cfg(target_os = "windows")]
+fn select_host() -> Host {
+    cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
+}
+
+#[cfg(target_os = "macos")]
 fn select_host() -> Host { cpal::default_host() }
 
 fn select_config<T: Iterator<Item=SupportedStreamConfigRange>>(
@@ -99,7 +111,7 @@ impl Athernet {
 
         let stream = device.build_output_stream(
             &config.into(),
-            move |data: &mut [f32], _| {
+            move |data: &mut [SampleType], _| {
                 let channel_free = guard.load(Ordering::SeqCst);
 
                 if let Some((_, ref mut time, _)) = buffer {
@@ -111,7 +123,7 @@ impl Athernet {
                 }
 
                 for sample in data.iter_mut() {
-                    *sample = 0.;
+                    *sample = Sample::from(&0i16);
                 }
 
                 for sample in data.iter_mut() {
@@ -211,7 +223,7 @@ impl Athernet {
 
         let stream = device.build_input_stream(
             &config.into(),
-            move |data: &[f32], _| {
+            move |data: &[SampleType], _| {
                 for sample in data.iter() {
                     if channel == 0 {
                         if let Some(frame) = demodulator.push_back(Sample::from(sample)) {
