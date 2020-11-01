@@ -86,16 +86,21 @@ pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
 struct BitReceive {
     inner: MacFrameRaw,
     count: usize,
+    mac_addr: u8,
 }
 
 impl BitReceive {
     #[inline]
-    pub fn new() -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0 } }
+    pub fn new(mac_addr: u8) -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0, mac_addr } }
 
     #[inline]
     pub fn push(&mut self, bit: bool) -> Option<Option<MacFrame>> {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
+
+        if self.count == 8 && self.inner[MacFrame::SRC_INDEX] == self.mac_addr {
+            return Some(None);
+        }
 
         if self.count <= (MacFrame::MAC_DATA_SIZE + 1) * 8 {
             None
@@ -106,15 +111,18 @@ impl BitReceive {
                 0
             } + MacFrame::MAC_DATA_SIZE + CRC_SIZE;
 
-            if size > MAC_FRAME_MAX {
-                Some(None)
-            } else if self.count < size * 8 {
+            if size > MAC_FRAME_MAX { return Some(None); }
+
+            if self.count < size * 8 {
                 None
             } else {
                 Some(Some(MacFrame::from_raw(self.inner)))
             }
         }
     }
+
+    #[inline]
+    pub fn receiving(&self) -> bool { self.count > 8 }
 }
 
 enum DemodulateState {
@@ -127,6 +135,7 @@ pub struct Demodulator {
     state: DemodulateState,
     last_prod: i64,
     moving_average: i64,
+    mac_addr: u8,
 }
 
 impl Demodulator {
@@ -134,6 +143,7 @@ impl Demodulator {
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 19;
     const MOVING_AVERAGE: i64 = 16;
     const ACTIVE_THRESHOLD: i64 = 1024;
+    const JAMMING_THRESHOLD: i64 = 8192;
 
     fn dot_product<I: Iterator<Item=i16>, U: Iterator<Item=i16>>(iter_a: I, iter_b: U) -> i64 {
         iter_a.zip(iter_b).map(|(a, b)| a as i64 * b as i64).sum::<i64>()
@@ -154,16 +164,17 @@ impl Demodulator {
         (last * (Self::MOVING_AVERAGE - 1) + new) / Self::MOVING_AVERAGE
     }
 
-    pub fn new() -> Self {
+    pub fn new(mac_addr: u8) -> Self {
         Self {
             window: VecDeque::with_capacity(Self::PREAMBLE_LEN),
             state: DemodulateState::WAITE,
             last_prod: 0,
             moving_average: 0,
+            mac_addr,
         }
     }
 
-    pub fn is_active(&self) -> bool { self.moving_average > Self::ACTIVE_THRESHOLD }
+    pub fn is_active(&self) -> bool { self.moving_average > Self::JAMMING_THRESHOLD }
 
     pub fn push_back(&mut self, item: i16) -> Option<MacFrame> {
         if self.window.len() == Self::PREAMBLE_LEN { self.window.pop_front(); }
@@ -175,7 +186,8 @@ impl Demodulator {
 
         match self.state {
             DemodulateState::WAITE => {
-                if self.window.len() >= Self::PREAMBLE_LEN && self.is_active() {
+                if self.window.len() >= Self::PREAMBLE_LEN &&
+                    self.moving_average > Self::ACTIVE_THRESHOLD {
                     prod = self.preamble_product();
 
                     if prod > threshold && self.last_prod > prod && BARKER.len() <= BARKER.iter()
@@ -186,7 +198,7 @@ impl Demodulator {
 
                         if *bit == (prod > 0) { 1 } else { 0 }
                     }).sum::<usize>() {
-                        self.state = DemodulateState::RECEIVE(0, BitReceive::new());
+                        self.state = DemodulateState::RECEIVE(0, BitReceive::new(self.mac_addr));
                         prod = 0;
                     }
                 }
