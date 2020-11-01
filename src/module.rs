@@ -98,10 +98,6 @@ impl BitReceive {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
 
-        if self.count == 8 && self.inner[MacFrame::SRC_INDEX] == self.mac_addr {
-            return Some(None);
-        }
-
         if self.count <= (MacFrame::MAC_DATA_SIZE + 1) * 8 {
             None
         } else {
@@ -121,8 +117,10 @@ impl BitReceive {
         }
     }
 
-    // #[inline]
-    // pub fn receiving(&self) -> bool { self.count > 8 }
+    #[inline]
+    pub fn is_self(&self) -> bool {
+        self.count > 8 && self.inner[MacFrame::SRC_INDEX] == self.mac_addr
+    }
 }
 
 enum DemodulateState {
@@ -174,7 +172,15 @@ impl Demodulator {
         }
     }
 
-    pub fn is_active(&self) -> bool { self.moving_average > Self::JAMMING_THRESHOLD }
+    pub fn is_active(&self) -> bool {
+        if self.last_prod > Self::JAMMING_THRESHOLD { return false; }
+
+        if let DemodulateState::RECEIVE(_, receiver) = self.state {
+            !receiver.is_self()
+        } else {
+            false
+        }
+    }
 
     pub fn push_back(&mut self, item: i16) -> Option<MacFrame> {
         if self.window.len() == Self::PREAMBLE_LEN { self.window.pop_front(); }

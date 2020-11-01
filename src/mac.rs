@@ -36,7 +36,7 @@ pub struct MacFrame {
 impl MacFrame {
     pub const SRC_INDEX: usize = 0;
     pub const DEST_INDEX: usize = Self::SRC_INDEX + 1;
-    pub const OP_INDEX: usize = Self::SRC_INDEX + 1;
+    pub const OP_INDEX: usize = Self::DEST_INDEX + 1;
     pub const TAG_INDEX: usize = Self::OP_INDEX + 1;
     pub const MAC_DATA_SIZE: usize = Self::TAG_INDEX + 1;
 
