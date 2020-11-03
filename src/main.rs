@@ -54,8 +54,6 @@ enum Command {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    rtaudio::print_hosts();
-
     let mut args = env::args();
 
     args.next();

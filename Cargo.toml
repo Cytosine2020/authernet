@@ -14,7 +14,6 @@ opt-level = 0
 opt-level = 3
 
 [dependencies]
-cpal = { version = "0.12", features = ["asio"] }
 lazy_static = "1.4"
 rand = "0.7"
 

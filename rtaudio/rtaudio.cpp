@@ -2,27 +2,92 @@
 #include <cstdlib>
 
 #include "RtAudio.h"
+#include "rtaudio_c.h"
 
+
+#define rtaudio_static_inline static inline __attribute__((always_inline))
+
+rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
+    std::cerr << "Warn at file " << file << ", line " << line << ": " << msg << std::endl;
+}
+
+#define rtaudio_warn(msg) _warn(__FILE__, __LINE__, msg)
+
+
+constexpr uint32_t SAMPLE_FORMAT = RTAUDIO_FORMAT_SINT16;
+constexpr uint32_t SAMPLE_RATE = 48000;
+constexpr uint32_t BUFFER_SIZE = 128 * sizeof(int16_t);
+
+
+typedef void (*rust_callback)(void *data, int16_t *, size_t);
+
+struct CallbackData {
+    rust_callback inner;
+    void *data;
+};
+
+struct Stream {
+    rtaudio_t audio;
+    CallbackData *data;
+};
+
+rtaudio_static_inline void rtaudio_check_stream_status(rtaudio_stream_status_t status) {
+    switch (status) {
+        case RTAUDIO_STATUS_INPUT_OVERFLOW:
+            rtaudio_warn("input overflow!");
+            break;
+        case RTAUDIO_STATUS_OUTPUT_UNDERFLOW:
+            rtaudio_warn("output overflow!");
+            break;
+        default:
+            break;
+    }
+}
+
+int output_callback(void *out_buffer_, void *in_buffer, unsigned int size, double time,
+                    rtaudio_stream_status_t status, void *userdata_) {
+    (void) in_buffer;
+    (void) time;
+    auto *userdata = reinterpret_cast<CallbackData *>(userdata_);
+    auto *out_buffer = reinterpret_cast<int16_t *>(out_buffer_);
+    rtaudio_check_stream_status(status);
+
+    userdata->inner(userdata->data, out_buffer, size / sizeof(int16_t));
+
+    return 0;
+}
+
+int input_callback(void *out_buffer, void *in_buffer_, unsigned int size, double time,
+                   rtaudio_stream_status_t status, void *userdata_) {
+    (void) out_buffer;
+    (void) time;
+    auto *userdata = reinterpret_cast<CallbackData *>(userdata_);
+    auto *in_buffer = reinterpret_cast<int16_t *>(in_buffer_);
+    rtaudio_check_stream_status(status);
+
+    userdata->inner(userdata->data, in_buffer, size / sizeof(int16_t));
+
+    return 0;
+}
 
 extern "C" {
-RtAudio rtaudio{};
-
-void print_device(RtAudio::DeviceInfo &device) {
+void print_device(rtaudio_device_info_t &device) {
     if (device.probed) {
         // Print, for example, the maximum number of output channels for each device
-        std::cout << "device " << ": " << device.name << ",\n";
-        std::cout << "maximum output channels: " << device.outputChannels << ",\n";
-        std::cout << "maximum input channels: " << device.inputChannels << ",\n";
-        std::cout << "maximum duplex channels: " << device.duplexChannels << ",\n";
+        std::cout << "device: " << device.name << ",\n";
+        std::cout << "maximum output channels: " << device.output_channels << ",\n";
+        std::cout << "maximum input channels: " << device.input_channels << ",\n";
+        std::cout << "maximum duplex channels: " << device.duplex_channels << ",\n";
         std::cout << "sample rate:";
-        for (auto sample_rate: device.sampleRates) {
+        for (auto sample_rate: device.sample_rates) {
+            if (sample_rate == 0) { break; }
             std::cout << ' ' << sample_rate;
         }
         std::cout << ",\n";
-        std::cout << "preferredSampleRate: " << device.preferredSampleRate << ",\n";
+        std::cout << "preferredSampleRate: " << device.preferred_sample_rate << ",\n";
         std::cout << "nativeFormats: ";
 
-        switch (device.nativeFormats) {
+        switch (device.native_formats) {
             case RTAUDIO_SINT8:
                 std::cout << "i8";
                 break;
@@ -49,71 +114,102 @@ void print_device(RtAudio::DeviceInfo &device) {
     }
 }
 
-unsigned select_default_input() { return rtaudio.getDefaultInputDevice(); }
+rtaudio_static_inline rtaudio_t rtaudio_select_host() {
+    return rtaudio_create(RTAUDIO_API_UNSPECIFIED);
+}
 
-unsigned select_default_output() { return rtaudio.getDefaultOutputDevice(); }
+rtaudio_static_inline int32_t rtaudio_select_default_input(rtaudio_t host) {
+    return rtaudio_get_default_input_device(host);
+}
+
+rtaudio_static_inline int32_t rtaudio_select_default_output(rtaudio_t host) {
+    return rtaudio_get_default_output_device(host);
+}
 
 void rtaudio_print_hosts() {
-    RtAudio::DeviceInfo input = rtaudio.getDeviceInfo(select_default_input());
-    RtAudio::DeviceInfo output = rtaudio.getDeviceInfo(select_default_output());
+    rtaudio_t rtaudio = rtaudio_select_host();
+    rtaudio_device_info_t output = rtaudio_get_device_info(rtaudio,
+                                                           rtaudio_select_default_output(rtaudio));
+    rtaudio_device_info_t input = rtaudio_get_device_info(rtaudio,
+                                                          rtaudio_select_default_input(rtaudio));
 
     print_device(input);
     print_device(output);
 }
 
-// Pass-through function.
-int inout(void *outputBuffer, void *inputBuffer, unsigned int nBufferFrames, double streamTime,
-          RtAudioStreamStatus status, void *data) {
-    (void) nBufferFrames;
-    (void) streamTime;
+Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
+    rtaudio_t rtaudio = rtaudio_select_host();
+    uint32_t device = rtaudio_select_default_output(rtaudio);
 
-    // Since the number of input and output channels is equal, we can do
-    // a simple buffer copy operation here.
-    if (status) std::cout << "Stream over/underflow detected." << std::endl;
-    auto bytes = (unsigned long *) data;
-    memcpy(outputBuffer, inputBuffer, *bytes);
-    return 0;
+    rtaudio_stream_parameters_t config{.device_id = device, .num_channels = 1, .first_channel = 0};
+
+    uint32_t buffer_size = BUFFER_SIZE;
+
+    auto *callback_data = new CallbackData{.inner = callback, .data = data};
+
+    if (rtaudio_open_stream(rtaudio, &config, nullptr, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
+                            output_callback, callback_data, nullptr, nullptr)) { goto error; }
+
+    if (buffer_size != BUFFER_SIZE) {
+        std::stringstream buffer;
+        buffer << "output buffer size: " << buffer_size;
+        rtaudio_warn(buffer.str().c_str());
+    }
+
+    if (rtaudio_start_stream(rtaudio)) {
+        rtaudio_close_stream(rtaudio);
+        goto error;
+    }
+
+    return new Stream{rtaudio, callback_data};
+
+    error:
+    std::cerr << rtaudio_error(rtaudio) << std::endl;
+
+    rtaudio_destroy(rtaudio);
+
+    return nullptr;
 }
 
-void main_() {
-    rtaudio_print_hosts();
+Stream *rtaudio_create_input_stream(rust_callback callback, void *data) {
+    rtaudio_t rtaudio = rtaudio_select_host();
+    uint32_t device = rtaudio_select_default_input(rtaudio);
 
-    if (rtaudio.getDeviceCount() < 1) {
-        std::cout << "\nNo audio devices found!\n";
-        exit(0);
-    }
-    // Set the same number of channels for both input and output.
-    uint32_t bufferFrames = 512;
-    uint32_t bufferBytes = bufferFrames * sizeof(int16_t);
-    RtAudio::StreamParameters iParams, oParams;
-    iParams.deviceId = select_default_input();
-    iParams.nChannels = 1;
-    oParams.deviceId = select_default_output();
-    oParams.nChannels = 1;
+    rtaudio_stream_parameters_t config{.device_id = device, .num_channels = 1, .first_channel = 0};
 
-    try {
-        rtaudio.openStream(&oParams, &iParams, RTAUDIO_SINT16, 48000, &bufferFrames, &inout,
-                           (void *) &bufferBytes);
-    } catch (RtAudioError &e) {
-        e.printMessage();
-        exit(0);
+    uint32_t buffer_size = BUFFER_SIZE;
+
+    auto *callback_data = new CallbackData{.inner = callback, .data = data};
+
+    if (rtaudio_open_stream(rtaudio, nullptr, &config, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
+                            input_callback, callback_data, nullptr, nullptr)) { goto error; }
+
+    if (buffer_size != BUFFER_SIZE) {
+        std::stringstream buffer;
+        buffer << "input buffer size: " << buffer_size;
+        rtaudio_warn(buffer.str().c_str());
     }
 
-    try {
-        rtaudio.startStream();
-        char input;
-        std::cout << "\nRunning ... press <enter> to quit.\n";
-        std::cin.get(input);
-        // Stop the stream.
-        rtaudio.stopStream();
-    } catch (RtAudioError &e) {
-        e.printMessage();
-        goto cleanup;
+    if (rtaudio_start_stream(rtaudio)) {
+        rtaudio_close_stream(rtaudio);
+        goto error;
     }
 
-    cleanup:
-    if (rtaudio.isStreamOpen()) {
-        rtaudio.closeStream();
-    }
+    return new Stream{rtaudio, callback_data};
+
+    error:
+    std::cerr << rtaudio_error(rtaudio) << std::endl;
+
+    rtaudio_destroy(rtaudio);
+
+    return nullptr;
+}
+
+void rtaudio_destroy_stream(Stream *stream) {
+    rtaudio_stop_stream(stream->audio);
+    rtaudio_close_stream(stream->audio);
+    rtaudio_destroy(stream->audio);
+    delete stream->data;
+    delete stream;
 }
 }
