@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.10)
+project(crtaudio C CXX)
+
+set(CMAKE_CXX_STANDARD 11)
+
+set(RTAUDIO_BUILD_TESTING OFF)
+set(RTAUDIO_API_CORE ON)
+
+add_subdirectory(rtaudio EXCLUDE_FROM_ALL)
+include_directories(rtaudio)
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -ggdb -g3 -fno-omit-frame-pointer -D __DEBUG__")
+
+add_library(crtaudio rtaudio.cpp)
+target_compile_definitions(crtaudio PRIVATE __MACOSX_CORE__)
+target_link_libraries(crtaudio rtaudio)

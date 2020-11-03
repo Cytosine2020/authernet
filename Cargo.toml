@@ -3,6 +3,7 @@ name = "network"
 version = "0.1.0"
 authors = ["Kaiyuan Xu <xuky@shanghaitech.edu.cn>"]
 edition = "2018"
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -16,3 +17,6 @@ opt-level = 3
 cpal = { version = "0.12", features = ["asio"] }
 lazy_static = "1.4"
 rand = "0.7"
+
+[build-dependencies]
+cmake = "0.1"

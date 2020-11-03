@@ -242,7 +242,7 @@ impl Athernet {
                                     }
                                     MacFrame::OP_PING_REQ => {
                                         ping_sender.send(tag).unwrap();
-                                        // println!("receiving PING REQ {:?}", tag);
+                                        println!("receiving PING REQ {:?}", tag);
                                     }
                                     MacFrame::OP_PING_REPLY => {
                                         ping_send.send(tag).unwrap();
