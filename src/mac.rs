@@ -1,5 +1,5 @@
 use lazy_static;
-use crate::acoustic::Athernet;
+use crate::athernet::Athernet;
 
 
 pub const DATA_PACK_MAX: usize = 128;

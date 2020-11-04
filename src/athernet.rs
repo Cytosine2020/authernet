@@ -88,23 +88,21 @@ impl Athernet {
             }
 
             for sample in data.iter_mut() {
-                *sample = 0;
-            }
-
-            for sample in data.iter_mut() {
                 match send_state {
                     SendState::Idle => {
-                        if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
-                            let frame = MacFrame::new_ack(mac_addr, dest, tag);
-                            send_state = sending(frame, 0);
-                        } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
-                            let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
-                            send_state = sending(frame, 0);
-                        } else if channel_free {
-                            if let Some((frame, time, count)) = buffer {
+                        if channel_free {
+                            if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
+                                let frame = MacFrame::new_ack(mac_addr, dest, tag);
+                                send_state = sending(frame, 0);
+                            } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
+                                let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
+                                send_state = sending(frame, 0);
+                            } else if let Some((frame, time, count)) = buffer {
                                 if time == 0 {
                                     buffer = None;
                                     send_state = sending(frame, count + 1);
+                                } else {
+                                    break;
                                 }
                             } else if let Some(frame) = receiver.try_iter().next() {
                                 send_state = sending(frame, 0);
@@ -116,7 +114,7 @@ impl Athernet {
                         };
                     }
                     SendState::Sending(frame, ref mut iter, count) => {
-                        if channel_free || !frame.is_data() {
+                        if channel_free {
                             if let Some(item) = iter.next() {
                                 *sample = item;
                             } else {
@@ -203,11 +201,11 @@ impl Athernet {
                         }
                     }
                 }
+            }
 
-                if channel_active != demodulator.is_active() {
-                    channel_active = demodulator.is_active();
-                    guard.store(!channel_active, Ordering::SeqCst);
-                }
+            if channel_active != demodulator.is_active() {
+                channel_active = demodulator.is_active();
+                guard.store(!channel_active, Ordering::SeqCst);
             }
         })?;
 

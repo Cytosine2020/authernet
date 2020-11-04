@@ -1,5 +1,14 @@
-#include <iostream>
 #include <cstdlib>
+#include <cstdio>
+#include <iostream>
+
+#if defined(__APPLE__)
+#define __MACOSX_CORE__
+#endif
+
+#if defined(__linux__)
+#define __LINUX_ALSA__
+#endif
 
 #include "RtAudio.h"
 #include "rtaudio_c.h"
@@ -8,7 +17,7 @@
 #define rtaudio_static_inline static inline __attribute__((always_inline))
 
 rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
-    std::cerr << "Warn at file " << file << ", line " << line << ": " << msg << std::endl;
+    fprintf(stderr, "Warn at file %s, line %d: %s\n", file, line, msg);
 }
 
 #define rtaudio_warn(msg) _warn(__FILE__, __LINE__, msg)
@@ -17,7 +26,14 @@ rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
 constexpr uint32_t CHANNEL_COUNT = 1;
 constexpr uint32_t SAMPLE_FORMAT = RTAUDIO_FORMAT_SINT16;
 constexpr uint32_t SAMPLE_RATE = 48000;
-constexpr uint32_t BUFFER_SIZE = 128;
+constexpr uint32_t BUFFER_SIZE = 0;
+
+struct rtaudio_stream_options options{
+        .flags = RTAUDIO_FLAGS_MINIMIZE_LATENCY | RTAUDIO_FLAGS_SCHEDULE_REALTIME,
+        .num_buffers = 2,
+        .priority = 0,
+        .name = "athernet",
+};
 
 
 typedef void (*rust_callback)(void *data, int16_t *, size_t);
@@ -38,7 +54,7 @@ rtaudio_static_inline void rtaudio_check_stream_status(rtaudio_stream_status_t s
             rtaudio_warn("input overflow!");
             break;
         case RTAUDIO_STATUS_OUTPUT_UNDERFLOW:
-            rtaudio_warn("output overflow!");
+            rtaudio_warn("output underflow!");
             break;
         default:
             break;
@@ -52,6 +68,8 @@ int output_callback(void *out_buffer_, void *in_buffer, unsigned int size, doubl
     auto *userdata = reinterpret_cast<CallbackData *>(userdata_);
     auto *out_buffer = reinterpret_cast<int16_t *>(out_buffer_);
     rtaudio_check_stream_status(status);
+
+    memset(out_buffer, 0, size * sizeof(int16_t));
 
     userdata->inner(userdata->data, out_buffer, size);
 
@@ -153,13 +171,7 @@ Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
     auto *callback_data = new CallbackData{.inner = callback, .data = data};
 
     if (rtaudio_open_stream(rtaudio, &config, nullptr, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
-                            output_callback, callback_data, nullptr, nullptr)) { goto error; }
-
-    if (buffer_size != BUFFER_SIZE) {
-        std::stringstream buffer;
-        buffer << "output buffer size: " << buffer_size;
-        rtaudio_warn(buffer.str().c_str());
-    }
+                            output_callback, callback_data, &options, nullptr)) { goto error; }
 
     if (rtaudio_start_stream(rtaudio)) {
         rtaudio_close_stream(rtaudio);
@@ -191,13 +203,7 @@ Stream *rtaudio_create_input_stream(rust_callback callback, void *data) {
     auto *callback_data = new CallbackData{.inner = callback, .data = data};
 
     if (rtaudio_open_stream(rtaudio, nullptr, &config, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
-                            input_callback, callback_data, nullptr, nullptr)) { goto error; }
-
-    if (buffer_size != BUFFER_SIZE) {
-        std::stringstream buffer;
-        buffer << "input buffer size: " << buffer_size;
-        rtaudio_warn(buffer.str().c_str());
-    }
+                            input_callback, callback_data, &options, nullptr)) { goto error; }
 
     if (rtaudio_start_stream(rtaudio)) {
         rtaudio_close_stream(rtaudio);

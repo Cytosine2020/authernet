@@ -1,5 +1,5 @@
 pub mod rtaudio;
-pub mod acoustic;
+pub mod athernet;
 pub mod module;
 pub mod mac;
 
