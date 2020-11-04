@@ -184,25 +184,23 @@ impl Athernet {
                         match frame.get_op() {
                             MacFrame::OP_ACK => {
                                 ack_recv_sender.send(tag).unwrap();
-                                println!("receiving ACK {:?}", tag);
+                                // println!("receiving ACK {:?}", tag);
                             }
                             MacFrame::OP_DATA => {
                                 ack_send_sender.send(tag).unwrap();
                                 sender.send(frame).unwrap();
-                                println!("receiving DATA {:?}", tag);
+                                // println!("receiving DATA {:?}", tag);
                             }
                             MacFrame::OP_PING_REQ => {
                                 ping_sender.send(tag).unwrap();
-                                println!("receiving PING REQ {:?}", tag);
+                                // println!("receiving PING REQ {:?}", tag);
                             }
                             MacFrame::OP_PING_REPLY => {
                                 ping_send.send(tag).unwrap();
-                                println!("receiving PING REPLY {:?}", tag);
+                                // println!("receiving PING REPLY {:?}", tag);
                             }
                             _ => {}
                         }
-                    } else {
-                        println!("crc fail!");
                     }
                 }
 

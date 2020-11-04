@@ -14,9 +14,10 @@ rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
 #define rtaudio_warn(msg) _warn(__FILE__, __LINE__, msg)
 
 
+constexpr uint32_t CHANNEL_COUNT = 1;
 constexpr uint32_t SAMPLE_FORMAT = RTAUDIO_FORMAT_SINT16;
 constexpr uint32_t SAMPLE_RATE = 48000;
-constexpr uint32_t BUFFER_SIZE = 128 * sizeof(int16_t);
+constexpr uint32_t BUFFER_SIZE = 128;
 
 
 typedef void (*rust_callback)(void *data, int16_t *, size_t);
@@ -52,7 +53,7 @@ int output_callback(void *out_buffer_, void *in_buffer, unsigned int size, doubl
     auto *out_buffer = reinterpret_cast<int16_t *>(out_buffer_);
     rtaudio_check_stream_status(status);
 
-    userdata->inner(userdata->data, out_buffer, size / sizeof(int16_t));
+    userdata->inner(userdata->data, out_buffer, size);
 
     return 0;
 }
@@ -65,7 +66,7 @@ int input_callback(void *out_buffer, void *in_buffer_, unsigned int size, double
     auto *in_buffer = reinterpret_cast<int16_t *>(in_buffer_);
     rtaudio_check_stream_status(status);
 
-    userdata->inner(userdata->data, in_buffer, size / sizeof(int16_t));
+    userdata->inner(userdata->data, in_buffer, size);
 
     return 0;
 }
@@ -141,7 +142,11 @@ Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
     rtaudio_t rtaudio = rtaudio_select_host();
     uint32_t device = rtaudio_select_default_output(rtaudio);
 
-    rtaudio_stream_parameters_t config{.device_id = device, .num_channels = 1, .first_channel = 0};
+    rtaudio_stream_parameters_t config{
+            .device_id = device,
+            .num_channels = CHANNEL_COUNT,
+            .first_channel = 0
+    };
 
     uint32_t buffer_size = BUFFER_SIZE;
 
@@ -175,7 +180,11 @@ Stream *rtaudio_create_input_stream(rust_callback callback, void *data) {
     rtaudio_t rtaudio = rtaudio_select_host();
     uint32_t device = rtaudio_select_default_input(rtaudio);
 
-    rtaudio_stream_parameters_t config{.device_id = device, .num_channels = 1, .first_channel = 0};
+    rtaudio_stream_parameters_t config{
+            .device_id = device,
+            .num_channels = CHANNEL_COUNT,
+            .first_channel = 0
+    };
 
     uint32_t buffer_size = BUFFER_SIZE;
 
