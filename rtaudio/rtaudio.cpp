@@ -15,7 +15,7 @@
 #include "rtaudio_c.h"
 
 
-#define rtaudio_static_inline static inline __attribute__((always_inline))
+#define rtaudio_static_inline static inline
 
 rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
     fprintf(stderr, "Warn at file %s, line %d: %s\n", file, line, msg);
@@ -30,10 +30,7 @@ constexpr uint32_t SAMPLE_RATE = 48000;
 constexpr uint32_t BUFFER_SIZE = 0;
 
 struct rtaudio_stream_options options{
-        .flags = RTAUDIO_FLAGS_MINIMIZE_LATENCY | RTAUDIO_FLAGS_SCHEDULE_REALTIME,
-        .num_buffers = 2,
-        .priority = 0,
-        .name = {},
+        RTAUDIO_FLAGS_MINIMIZE_LATENCY | RTAUDIO_FLAGS_SCHEDULE_REALTIME, 2, 0, {}
 };
 
 
@@ -161,15 +158,11 @@ Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
     rtaudio_t rtaudio = rtaudio_select_host();
     uint32_t device = rtaudio_select_default_output(rtaudio);
 
-    rtaudio_stream_parameters_t config{
-            .device_id = device,
-            .num_channels = CHANNEL_COUNT,
-            .first_channel = 0
-    };
+    rtaudio_stream_parameters_t config{device, CHANNEL_COUNT, 0};
 
     uint32_t buffer_size = BUFFER_SIZE;
 
-    auto *callback_data = new CallbackData{.inner = callback, .data = data};
+    auto *callback_data = new CallbackData{callback, data};
 
     if (rtaudio_open_stream(rtaudio, &config, nullptr, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
                             output_callback, callback_data, &options, nullptr)) { goto error; }
@@ -193,15 +186,11 @@ Stream *rtaudio_create_input_stream(rust_callback callback, void *data) {
     rtaudio_t rtaudio = rtaudio_select_host();
     uint32_t device = rtaudio_select_default_input(rtaudio);
 
-    rtaudio_stream_parameters_t config{
-            .device_id = device,
-            .num_channels = CHANNEL_COUNT,
-            .first_channel = 0
-    };
+    rtaudio_stream_parameters_t config{device, CHANNEL_COUNT, 0};
 
     uint32_t buffer_size = BUFFER_SIZE;
 
-    auto *callback_data = new CallbackData{.inner = callback, .data = data};
+    auto *callback_data = new CallbackData{callback, data};
 
     if (rtaudio_open_stream(rtaudio, nullptr, &config, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
                             input_callback, callback_data, &options, nullptr)) { goto error; }
