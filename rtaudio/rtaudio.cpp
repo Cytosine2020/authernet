@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 
 #if defined(__APPLE__)
@@ -32,7 +33,7 @@ struct rtaudio_stream_options options{
         .flags = RTAUDIO_FLAGS_MINIMIZE_LATENCY | RTAUDIO_FLAGS_SCHEDULE_REALTIME,
         .num_buffers = 2,
         .priority = 0,
-        .name = "athernet",
+        .name = {},
 };
 
 
