@@ -91,7 +91,14 @@ extern "C" {
 void print_device(rtaudio_device_info_t &device) {
     if (device.probed) {
         // Print, for example, the maximum number of output channels for each device
-        std::cout << "device: " << device.name << "\n";
+        std::cout << "device: \"" << device.name << "\"";
+        if (device.is_default_output) {
+            std::cout << " <default output>";
+        }
+        if (device.is_default_input) {
+            std::cout << " <default input>";
+        }
+        std::cout << std::endl;
         std::cout << "\tmaximum output channels: " << device.output_channels << ",\n";
         std::cout << "\tmaximum input channels: " << device.input_channels << ",\n";
         std::cout << "\tmaximum duplex channels: " << device.duplex_channels << ",\n";
@@ -151,19 +158,14 @@ rtaudio_static_inline int32_t rtaudio_select_default_output(rtaudio_t host) {
 
 void rtaudio_print_hosts() {
     rtaudio_t rtaudio = rtaudio_select_host();
+    int32_t count = rtaudio_device_count(rtaudio);
 
     std::cout << "Host: " << rtaudio_api_display_name(rtaudio_current_api(rtaudio)) << std::endl;
 
-    int32_t output = rtaudio_select_default_output(rtaudio);
-    int32_t input = rtaudio_select_default_input(rtaudio);
-
-    rtaudio_device_info_t output_info = rtaudio_get_device_info(rtaudio, output);
-    rtaudio_device_info_t input_info = rtaudio_get_device_info(rtaudio, input);
-
-    std::cout << "Output ";
-    print_device(output_info);
-    std::cout << "Input ";
-    print_device(input_info);
+    for (int32_t i = 0; i < count; ++i) {
+        rtaudio_device_info_t device_info = rtaudio_get_device_info(rtaudio, i);
+        print_device(device_info);
+    }
 }
 
 Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
