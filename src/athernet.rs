@@ -125,7 +125,9 @@ impl Athernet {
                                 }
                             }
                         } else {
-                            buffer = back_off(frame, count);
+                            if !frame.is_ack() {
+                                buffer = back_off(frame, count);
+                            }
                             send_state = SendState::Idle;
                         };
                     }

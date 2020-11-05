@@ -8,7 +8,7 @@
 #endif
 
 #if defined(__linux__)
-#define __LINUX_ALSA__
+#define __UNIX_JACK__
 #endif
 
 #include "RtAudio.h"
@@ -30,7 +30,7 @@ constexpr uint32_t SAMPLE_RATE = 48000;
 constexpr uint32_t BUFFER_SIZE = 0;
 
 struct rtaudio_stream_options options{
-        RTAUDIO_FLAGS_MINIMIZE_LATENCY | RTAUDIO_FLAGS_SCHEDULE_REALTIME, 2, 0, {}
+        RTAUDIO_FLAGS_MINIMIZE_LATENCY | RTAUDIO_FLAGS_SCHEDULE_REALTIME, 2, 1, {}
 };
 
 
@@ -91,18 +91,18 @@ extern "C" {
 void print_device(rtaudio_device_info_t &device) {
     if (device.probed) {
         // Print, for example, the maximum number of output channels for each device
-        std::cout << "device: " << device.name << ",\n";
-        std::cout << "maximum output channels: " << device.output_channels << ",\n";
-        std::cout << "maximum input channels: " << device.input_channels << ",\n";
-        std::cout << "maximum duplex channels: " << device.duplex_channels << ",\n";
-        std::cout << "sample rate:";
+        std::cout << "device: " << device.name << "\n";
+        std::cout << "\tmaximum output channels: " << device.output_channels << ",\n";
+        std::cout << "\tmaximum input channels: " << device.input_channels << ",\n";
+        std::cout << "\tmaximum duplex channels: " << device.duplex_channels << ",\n";
+        std::cout << "\tsample rate:";
         for (auto sample_rate: device.sample_rates) {
             if (sample_rate == 0) { break; }
             std::cout << ' ' << sample_rate;
         }
         std::cout << ",\n";
-        std::cout << "preferredSampleRate: " << device.preferred_sample_rate << ",\n";
-        std::cout << "nativeFormats: ";
+        std::cout << "\tpreferredSampleRate: " << device.preferred_sample_rate << ",\n";
+        std::cout << "\tnativeFormats: ";
 
         switch (device.native_formats) {
             case RTAUDIO_SINT8:
@@ -145,13 +145,19 @@ rtaudio_static_inline int32_t rtaudio_select_default_output(rtaudio_t host) {
 
 void rtaudio_print_hosts() {
     rtaudio_t rtaudio = rtaudio_select_host();
-    rtaudio_device_info_t output = rtaudio_get_device_info(rtaudio,
-                                                           rtaudio_select_default_output(rtaudio));
-    rtaudio_device_info_t input = rtaudio_get_device_info(rtaudio,
-                                                          rtaudio_select_default_input(rtaudio));
 
-    print_device(input);
-    print_device(output);
+    std::cout << "Host: " << rtaudio_api_display_name(rtaudio_current_api(rtaudio)) << std::endl;
+
+    int32_t output = rtaudio_select_default_output(rtaudio);
+    int32_t input = rtaudio_select_default_input(rtaudio);
+
+    rtaudio_device_info_t output_info = rtaudio_get_device_info(rtaudio, output);
+    rtaudio_device_info_t input_info = rtaudio_get_device_info(rtaudio, input);
+
+    std::cout << "Output ";
+    print_device(output_info);
+    std::cout << "Input ";
+    print_device(input_info);
 }
 
 Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
