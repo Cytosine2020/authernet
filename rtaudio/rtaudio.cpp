@@ -132,7 +132,13 @@ void print_device(rtaudio_device_info_t &device) {
 }
 
 rtaudio_static_inline rtaudio_t rtaudio_select_host() {
+#if defined(__APPLE__)
     return rtaudio_create(RTAUDIO_API_UNSPECIFIED);
+#endif
+
+#if defined(__linux__)
+    return rtaudio_create(RTAUDIO_API_UNIX_JACK);
+#endif
 }
 
 rtaudio_static_inline int32_t rtaudio_select_default_input(rtaudio_t host) {
