@@ -2,7 +2,7 @@
 .vscode/
 
 target/
-buid/
+build/
 cmake-build-*/
 
 .DS_store
