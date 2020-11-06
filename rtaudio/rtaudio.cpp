@@ -26,11 +26,7 @@ rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
 constexpr uint32_t CHANNEL_COUNT = 1;
 constexpr uint32_t SAMPLE_FORMAT = RTAUDIO_FORMAT_SINT16;
 constexpr uint32_t SAMPLE_RATE = 48000;
-constexpr uint32_t BUFFER_SIZE = 0;
-
-struct rtaudio_stream_options options{
-        RTAUDIO_FLAGS_MINIMIZE_LATENCY | RTAUDIO_FLAGS_SCHEDULE_REALTIME, 2, 1, {}
-};
+constexpr uint32_t BUFFER_SIZE = 32;
 
 
 typedef void (*rust_callback)(void *data, int16_t *, size_t);
@@ -178,7 +174,7 @@ Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
     auto *callback_data = new CallbackData{callback, data};
 
     if (rtaudio_open_stream(rtaudio, &config, nullptr, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
-                            output_callback, callback_data, &options, nullptr)) { goto error; }
+                            output_callback, callback_data, nullptr, nullptr)) { goto error; }
 
     if (rtaudio_start_stream(rtaudio)) {
         rtaudio_close_stream(rtaudio);
@@ -206,7 +202,7 @@ Stream *rtaudio_create_input_stream(rust_callback callback, void *data) {
     auto *callback_data = new CallbackData{callback, data};
 
     if (rtaudio_open_stream(rtaudio, nullptr, &config, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
-                            input_callback, callback_data, &options, nullptr)) { goto error; }
+                            input_callback, callback_data, nullptr, nullptr)) { goto error; }
 
     if (rtaudio_start_stream(rtaudio)) {
         rtaudio_close_stream(rtaudio);

@@ -98,7 +98,7 @@ impl BitReceive {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
 
-        if self.count <= (MacFrame::MAC_DATA_SIZE + 1) * 8 {
+        if self.count <= (MacFrame::MAC_DATA_SIZE + CRC_SIZE) * 8 {
             None
         } else {
             let size = if self.inner[MacFrame::OP_INDEX] == MacFrame::OP_DATA {

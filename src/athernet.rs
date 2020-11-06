@@ -9,9 +9,9 @@ use crate::{
 };
 
 
-const ACK_TIMEOUT: usize = 10000;
+const ACK_TIMEOUT: usize = 1200;
 const BACK_OFF_WINDOW: usize = 128;
-const DIFS: usize = 512;
+const DIFS: usize = 32;
 
 
 enum SendState<I> {
