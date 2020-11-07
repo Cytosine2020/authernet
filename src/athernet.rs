@@ -72,7 +72,7 @@ impl Athernet {
         let mut time = std::time::SystemTime::now();
 
         let stream = create_output_stream(move |data: &mut [i16]| {
-            let _channel_free = guard.load(Ordering::SeqCst);
+            let channel_free = guard.load(Ordering::SeqCst);
 
             if let Some((_, ref mut time, _)) = buffer {
                 *time = time.saturating_sub(data.len());
@@ -85,7 +85,7 @@ impl Athernet {
             for sample in data.iter_mut() {
                 match send_state {
                     SendState::Idle => {
-                        // if channel_free {
+                        if channel_free {
                             if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
                                 let frame = MacFrame::new_ack(mac_addr, dest, tag);
                                 send_state = sending(frame, 0);
@@ -104,12 +104,12 @@ impl Athernet {
                             } else {
                                 break;
                             };
-                        // } else {
-                        //     break;
-                        // };
+                        } else {
+                            break;
+                        };
                     }
                     SendState::Sending(frame, ref mut iter, count) => {
-                        // if channel_free {
+                        if channel_free {
                             if let Some(item) = iter.next() {
                                 *sample = item;
                             } else {
@@ -119,13 +119,13 @@ impl Athernet {
                                     SendState::Idle
                                 }
                             }
-                        // } else {
-                        //     // println!("collision");
-                        //     if !frame.is_ack() {
-                        //         buffer = back_off(frame, count);
-                        //     }
-                        //     send_state = SendState::Idle;
-                        // };
+                        } else {
+                            // println!("collision");
+                            if !frame.is_ack() {
+                                buffer = back_off(frame, count);
+                            }
+                            send_state = SendState::Idle;
+                        };
                     }
                     SendState::WaitAck(frame, ref mut time, count) => {
                         if *time > 0 {
