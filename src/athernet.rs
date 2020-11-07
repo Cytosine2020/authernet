@@ -43,15 +43,15 @@ impl Athernet {
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |frame: MacFrame, count| {
-            let tag = (frame.get_dest(), frame.get_tag());
-
-            match frame.get_op() {
-                // MacFrame::OP_ACK => println!("sending ACK {:?}", tag),
-                // MacFrame::OP_DATA => println!("sending DATA {:?}", tag),
-                // MacFrame::OP_PING_REQ => println!("sending PING REQ {:?}", tag),
-                // MacFrame::OP_PING_REPLY => println!("sending RING REPLY {:?}", tag),
-                _ => {}
-            }
+            // let tag = (frame.get_dest(), frame.get_tag());
+            //
+            // match frame.get_op() {
+            //     MacFrame::OP_ACK => println!("sending ACK {:?}", tag),
+            //     MacFrame::OP_DATA => println!("sending DATA {:?}", tag),
+            //     MacFrame::OP_PING_REQ => println!("sending PING REQ {:?}", tag),
+            //     MacFrame::OP_PING_REPLY => println!("sending RING REPLY {:?}", tag),
+            //     _ => {}
+            // }
 
             SendState::Sending(frame, modulate(frame), count)
         };
@@ -94,8 +94,21 @@ impl Athernet {
                         };
                     };
                 }
-                SendState::Sending(frame, _, count) => {
-                    if !channel_free {
+                SendState::Sending(frame, ref mut iter, count) => {
+                    if channel_free {
+                        for sample in data.iter_mut() {
+                            if let Some(item) = iter.next() {
+                                *sample = item;
+                            } else {
+                                send_state = if frame.is_data() && !frame.to_broadcast() {
+                                    SendState::WaitAck(frame, ACK_TIMEOUT, count)
+                                } else {
+                                    SendState::Idle(0)
+                                };
+                                break;
+                            };
+                        };
+                    } else {
                         // println!("collision");
                         if !frame.is_ack() {
                             buffer = back_off(frame, count);
@@ -121,21 +134,6 @@ impl Athernet {
                     };
                 }
             }
-
-            if let SendState::Sending(frame, ref mut iter, count) = send_state {
-                for sample in data.iter_mut() {
-                    if let Some(item) = iter.next() {
-                        *sample = item;
-                    } else {
-                        send_state = if frame.is_data() && !frame.to_broadcast() {
-                            SendState::WaitAck(frame, ACK_TIMEOUT, count)
-                        } else {
-                            SendState::Idle(0)
-                        };
-                        break;
-                    };
-                };
-            };
 
             if perf && time.elapsed().unwrap() > std::time::Duration::from_secs(1) {
                 time = std::time::SystemTime::now();
