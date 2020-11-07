@@ -82,11 +82,9 @@ impl Athernet {
                 SendState::Idle => {
                     if channel_free {
                         if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
-                            let frame = MacFrame::new_ack(mac_addr, dest, tag);
-                            send_state = sending(frame, 0);
+                            send_state = sending(MacFrame::new_ack(mac_addr, dest, tag), 0);
                         } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
-                            let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
-                            send_state = sending(frame, 0);
+                            send_state = sending(MacFrame::new_ping_reply(mac_addr, dest, tag), 0);
                         } else if let Some((frame, time, count)) = buffer {
                             if time == 0 {
                                 send_state = sending(frame, count + 1);
@@ -99,7 +97,7 @@ impl Athernet {
                 }
                 SendState::Sending(frame, _, count, ref mut jam_count) => {
                     if !channel_free {
-                        if *jam_count < 64 {
+                        if *jam_count < 128 {
                             *jam_count += data.len();
                         } else {
                             // println!("collision");
