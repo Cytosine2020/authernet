@@ -58,8 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     args.next();
 
-    let src = args.next().unwrap().parse::<u8>()?;
-    let dest = args.next().unwrap().parse::<u8>()?;
+    let src = args.next().unwrap().parse::<u8>()? & 0b1111;
+    let dest = args.next().unwrap().parse::<u8>()? & 0b1111;
     let mut commands = Vec::new();
     let mut perf = false;
     let mut wait = 0;
