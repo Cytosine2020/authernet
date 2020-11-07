@@ -76,11 +76,11 @@ impl Athernet {
 
             if let Some((_, ref mut time, _)) = buffer {
                 *time = time.saturating_sub(data.len());
-            }
+            };
 
             if let SendState::WaitAck(_, ref mut time, _) = send_state {
                 *time = time.saturating_sub(data.len());
-            }
+            };
 
             for sample in data.iter_mut() {
                 match send_state {
@@ -136,6 +136,7 @@ impl Athernet {
                             }) {
                                 bit_count += frame.get_payload_size() * 8;
 
+                                channel_free = true;
                                 send_state = SendState::Idle;
                             } else {
                                 break;
@@ -143,7 +144,6 @@ impl Athernet {
                         } else {
                             // println!("retransmit");
                             buffer = back_off(frame, count);
-                            channel_free = true;
                             send_state = SendState::Idle;
                         };
                     }
