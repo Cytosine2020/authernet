@@ -11,11 +11,11 @@ use crate::{
 
 const ACK_TIMEOUT: usize = 1200;
 const BACK_OFF_WINDOW: usize = 64;
-const FRAME_INTERVAL: usize = 64;
+const FRAME_INTERVAL: usize = 128;
 
 
 enum SendState<I> {
-    Idle(usize),
+    Idle,
     Sending(MacFrame, I, usize),
     WaitAck(MacFrame, usize, usize),
 }
@@ -39,10 +39,12 @@ impl Athernet {
     ) -> Result<(Sender<MacFrame>, Stream), Box<dyn std::error::Error>> {
         let (sender, receiver) = mpsc::channel();
 
-        let mut send_state = SendState::Idle(0);
+        let mut send_state = SendState::Idle;
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |frame: MacFrame, count| {
+            let iter = std::iter::repeat(0).take(FRAME_INTERVAL).chain(modulate(frame));
+
             // let tag = (frame.get_dest(), frame.get_tag());
             //
             // match frame.get_op() {
@@ -53,7 +55,7 @@ impl Athernet {
             //     _ => {}
             // }
 
-            SendState::Sending(frame, modulate(frame), count)
+            SendState::Sending(frame, iter, count)
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
@@ -75,19 +77,13 @@ impl Athernet {
                 *time = time.saturating_sub(data.len());
             }
 
-            match send_state {
-                SendState::Idle(ref mut time) => {
-                    *time = time.saturating_sub(data.len());
-                }
-                SendState::WaitAck(_, ref mut time, _) => {
-                    *time = time.saturating_sub(data.len());
-                }
-                _ => {}
+            if let SendState::WaitAck(_, ref mut time, _) = send_state {
+                *time = time.saturating_sub(data.len());
             }
 
             for sample in data.iter_mut() {
                 match send_state {
-                    SendState::Idle(time) => {
+                    SendState::Idle => {
                         if channel_free {
                             if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
                                 let frame = MacFrame::new_ack(mac_addr, dest, tag);
@@ -102,12 +98,8 @@ impl Athernet {
                                 } else {
                                     break;
                                 }
-                            } else if time == 0 {
-                                if let Some(frame) = receiver.try_iter().next() {
-                                    send_state = sending(frame, 0);
-                                } else {
-                                    break;
-                                }
+                            } else if let Some(frame) = receiver.try_iter().next() {
+                                send_state = sending(frame, 0);
                             } else {
                                 break;
                             };
@@ -123,7 +115,7 @@ impl Athernet {
                                 send_state = if frame.is_data() && !frame.to_broadcast() {
                                     SendState::WaitAck(frame, ACK_TIMEOUT, count)
                                 } else {
-                                    SendState::Idle(0)
+                                    SendState::Idle
                                 }
                             }
                         } else {
@@ -131,7 +123,7 @@ impl Athernet {
                             if !frame.is_ack() {
                                 buffer = back_off(frame, count);
                             }
-                            send_state = SendState::Idle(0);
+                            send_state = SendState::Idle;
                         };
                     }
                     SendState::WaitAck(frame, ref mut time, count) => {
@@ -141,14 +133,14 @@ impl Athernet {
                             }) {
                                 bit_count += frame.get_payload_size() * 8;
 
-                                send_state = SendState::Idle(FRAME_INTERVAL);
+                                send_state = SendState::Idle;
                             } else {
                                 break;
                             };
                         } else {
                             // println!("retransmit");
                             buffer = back_off(frame, count);
-                            send_state = SendState::Idle(0);
+                            send_state = SendState::Idle;
                         };
                     }
                 };

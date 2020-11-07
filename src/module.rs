@@ -142,7 +142,7 @@ impl Demodulator {
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 19;
     const MOVING_AVERAGE: i64 = 16;
     const ACTIVE_THRESHOLD: i64 = 512;
-    const JAMMING_THRESHOLD: i64 = 8192;
+    const JAMMING_THRESHOLD: i64 = 4096;
 
     fn dot_product<I: Iterator<Item=i16>, U: Iterator<Item=i16>>(iter_a: I, iter_b: U) -> i64 {
         iter_a.zip(iter_b).map(|(a, b)| a as i64 * b as i64).sum::<i64>()
