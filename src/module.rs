@@ -101,7 +101,7 @@ impl BitReceive {
         if self.count <= (MacFrame::MAC_DATA_SIZE + CRC_SIZE) * 8 {
             None
         } else {
-            let size = if self.inner[MacFrame::OP_INDEX] == MacFrame::OP_DATA {
+            let size = if (self.inner[MacFrame::OP_INDEX] & 0b1111) == MacFrame::OP_DATA {
                 self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1
             } else {
                 0
@@ -119,7 +119,7 @@ impl BitReceive {
 
     #[inline]
     pub fn is_self(&self) -> bool {
-        self.count > 8 && self.inner[MacFrame::SRC_INDEX] == self.mac_addr
+        self.count < 8 || self.inner[MacFrame::SRC_INDEX] == self.mac_addr
     }
 }
 
@@ -140,7 +140,7 @@ impl Demodulator {
     const PREAMBLE_LEN: usize = SYMBOL_LEN * BARKER.len();
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 19;
     const MOVING_AVERAGE: i64 = 16;
-    const ACTIVE_THRESHOLD: i64 = 1024;
+    const ACTIVE_THRESHOLD: i64 = 512;
     const JAMMING_THRESHOLD: i64 = 8192;
 
     fn dot_product<I: Iterator<Item=i16>, U: Iterator<Item=i16>>(iter_a: I, iter_b: U) -> i64 {
