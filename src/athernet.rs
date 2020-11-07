@@ -143,7 +143,7 @@ impl Athernet {
                         } else {
                             // println!("retransmit");
                             buffer = back_off(frame, count);
-                            channel_free = false;
+                            channel_free = true;
                             send_state = SendState::Idle;
                         };
                     }
