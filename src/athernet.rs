@@ -11,7 +11,7 @@ use crate::{
 
 const ACK_TIMEOUT: usize = 1200;
 const BACK_OFF_WINDOW: usize = 64;
-const FRAME_INTERVAL: usize = 128;
+const FRAME_INTERVAL: usize = 256;
 
 
 enum SendState<I> {
