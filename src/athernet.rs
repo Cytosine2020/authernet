@@ -16,7 +16,7 @@ const FRAME_INTERVAL: usize = 64;
 
 enum SendState<I> {
     Idle,
-    Sending(MacFrame, I, usize),
+    Sending(MacFrame, I, usize, usize),
     WaitAck(MacFrame, usize, usize),
 }
 
@@ -97,13 +97,19 @@ impl Athernet {
                         };
                     };
                 }
-                SendState::Sending(frame, _, count) => {
+                SendState::Sending(frame, _, count, ref mut jam_count) => {
                     if !channel_free {
-                        // println!("collision");
-                        if !frame.is_ack() {
-                            buffer = back_off(frame, count);
+                        if *jam_count < 64 {
+                            *jam_count += data.len();
+                        } else {
+                            // println!("collision");
+                            if !frame.is_ack() {
+                                buffer = back_off(frame, count);
+                            }
+                            send_state = SendState::Idle;
                         }
-                        send_state = SendState::Idle;
+
+
                     };
                 }
                 SendState::WaitAck(frame, ref mut time, count) => {
@@ -125,7 +131,7 @@ impl Athernet {
                 }
             }
 
-            if let SendState::Sending(frame, ref mut iter, count) = send_state {
+            if let SendState::Sending(frame, ref mut iter, count, _) = send_state {
                 for sample in data.iter_mut() {
                     if let Some(item) = iter.next() {
                         *sample = item;
