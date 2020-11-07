@@ -181,7 +181,7 @@ impl MacFrame {
     pub fn get_op(&self) -> u8 { (self.inner[Self::OP_INDEX] >> 0) & 0b1111 }
 
     #[inline]
-    pub fn get_tag(&self) -> u8 { (self.inner[Self::OP_INDEX]  >> 4) & 0b1111 }
+    pub fn get_tag(&self) -> u8 { (self.inner[Self::OP_INDEX] >> 4) & 0b1111 }
 
     #[inline]
     pub fn to_broadcast(&self) -> bool { self.get_dest() == MacFrame::BROADCAST_MAC }

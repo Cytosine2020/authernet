@@ -119,7 +119,7 @@ impl BitReceive {
 
     #[inline]
     pub fn is_self(&self) -> bool {
-        self.count < 4 || (self.inner[MacFrame::MAC_INDEX] >> 4) == self.mac_addr
+        self.count < 4 || (self.inner[MacFrame::MAC_INDEX] & 0b1111) == self.mac_addr
     }
 }
 
