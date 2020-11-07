@@ -88,7 +88,7 @@ impl Athernet {
             for sample in data.iter_mut() {
                 match send_state {
                     SendState::Idle(time) => {
-                        if channel_free && time == 0 {
+                        if channel_free {
                             if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
                                 let frame = MacFrame::new_ack(mac_addr, dest, tag);
                                 send_state = sending(frame, 0);
@@ -102,8 +102,12 @@ impl Athernet {
                                 } else {
                                     break;
                                 }
-                            } else if let Some(frame) = receiver.try_iter().next() {
-                                send_state = sending(frame, 0);
+                            } else if time == 0 {
+                                if let Some(frame) = receiver.try_iter().next() {
+                                    send_state = sending(frame, 0);
+                                } else {
+                                    break;
+                                }
                             } else {
                                 break;
                             };
