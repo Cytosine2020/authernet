@@ -42,7 +42,12 @@ impl Athernet {
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |frame: MacFrame, count| {
-            SendState::Sending(frame, modulate(frame), count)
+            let back_off = 16 * thread_rng().gen_range::<usize, usize, usize>(0, 4);
+
+            let iter = std::iter::repeat(0).take(back_off)
+                .chain(modulate(frame));
+
+            SendState::Sending(frame, iter, count)
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
