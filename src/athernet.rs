@@ -16,7 +16,7 @@ const FRAME_INTERVAL: usize = 64;
 
 enum SendState<I> {
     Idle,
-    Sending(MacFrame, I, usize, usize),
+    Sending(MacFrame, I, usize),
     WaitAck(MacFrame, usize, usize),
 }
 
@@ -56,7 +56,7 @@ impl Athernet {
             //     _ => {}
             // }
 
-            SendState::Sending(frame, iter, count, 0)
+            SendState::Sending(frame, iter, count)
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
@@ -72,81 +72,70 @@ impl Athernet {
         let mut time = std::time::SystemTime::now();
 
         let stream = create_output_stream(move |data: &mut [i16]| {
-            let mut channel_free = guard.load(Ordering::SeqCst);
+            let channel_free = guard.load(Ordering::SeqCst);
 
             if let Some((_, ref mut time, _)) = buffer {
                 *time = time.saturating_sub(data.len());
             };
 
-            if let SendState::WaitAck(_, ref mut time, _) = send_state {
-                *time = time.saturating_sub(data.len());
-            };
+            match send_state {
+                SendState::Idle => {
+                    if channel_free {
+                        if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
+                            let frame = MacFrame::new_ack(mac_addr, dest, tag);
+                            send_state = sending(frame, 0);
+                        } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
+                            let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
+                            send_state = sending(frame, 0);
+                        } else if let Some((frame, time, count)) = buffer {
+                            if time == 0 {
+                                send_state = sending(frame, count + 1);
+                                buffer = None;
+                            };
+                        } else if let Some(frame) = receiver.try_iter().next() {
+                            send_state = sending(frame, 0);
+                        };
+                    };
+                }
+                SendState::Sending(frame, _, count) => {
+                    if !channel_free {
+                        // println!("collision");
+                        if !frame.is_ack() {
+                            buffer = back_off(frame, count);
+                        }
+                        send_state = SendState::Idle;
+                    };
+                }
+                SendState::WaitAck(frame, ref mut time, count) => {
+                    *time = time.saturating_sub(data.len());
+
+                    if *time > 0 {
+                        if ack_recv_receiver.try_iter().any(|item| {
+                            item == (frame.get_dest(), frame.get_tag())
+                        }) {
+                            bit_count += frame.get_payload_size() * 8;
+
+                            send_state = SendState::Idle;
+                        };
+                    } else {
+                        // println!("retransmit");
+                        buffer = back_off(frame, count);
+                        send_state = SendState::Idle;
+                    };
+                }
+            }
 
             for sample in data.iter_mut() {
-                match send_state {
-                    SendState::Idle => {
-                        if channel_free {
-                            if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
-                                let frame = MacFrame::new_ack(mac_addr, dest, tag);
-                                send_state = sending(frame, 0);
-                            } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
-                                let frame = MacFrame::new_ping_reply(mac_addr, dest, tag);
-                                send_state = sending(frame, 0);
-                            } else if let Some((frame, time, count)) = buffer {
-                                if time == 0 {
-                                    send_state = sending(frame, count + 1);
-                                    buffer = None;
-                                } else {
-                                    break;
-                                }
-                            } else if let Some(frame) = receiver.try_iter().next() {
-                                send_state = sending(frame, 0);
-                            } else {
-                                break;
-                            };
+                if let SendState::Sending(frame, ref mut iter, count) = send_state {
+                    if let Some(item) = iter.next() {
+                        *sample = item;
+                    } else {
+                        send_state = if frame.is_data() && !frame.to_broadcast() {
+                            SendState::WaitAck(frame, ACK_TIMEOUT, count)
                         } else {
-                            break;
-                        };
-                    }
-                    SendState::Sending(frame, ref mut iter, count, ref mut jam) => {
-                        if channel_free {
-                            if let Some(item) = iter.next() {
-                                *sample = item;
-                            } else {
-                                send_state = if frame.is_data() && !frame.to_broadcast() {
-                                    SendState::WaitAck(frame, ACK_TIMEOUT, count)
-                                } else {
-                                    SendState::Idle
-                                }
-                            }
-                        } else if *jam < 64 {
-                            *jam += 1;
-                        } else {
-                            // println!("collision");
-                            if !frame.is_ack() {
-                                buffer = back_off(frame, count);
-                            }
-                            send_state = SendState::Idle;
-                        };
-                    }
-                    SendState::WaitAck(frame, ref mut time, count) => {
-                        if *time > 0 {
-                            if ack_recv_receiver.try_iter().any(|item| {
-                                item == (frame.get_dest(), frame.get_tag())
-                            }) {
-                                bit_count += frame.get_payload_size() * 8;
-
-                                channel_free = true;
-                                send_state = SendState::Idle;
-                            } else {
-                                break;
-                            };
-                        } else {
-                            // println!("retransmit");
-                            buffer = back_off(frame, count);
-                            send_state = SendState::Idle;
-                        };
-                    }
+                            SendState::Idle
+                        }
+                    };
                 };
             };
 
