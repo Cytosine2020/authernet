@@ -11,6 +11,7 @@ use crate::{
 
 const ACK_TIMEOUT: usize = 1200;
 const BACK_OFF_WINDOW: usize = 128;
+const DIFS: usize = 48;
 
 
 enum SendState<I> {
@@ -42,12 +43,7 @@ impl Athernet {
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |frame: MacFrame, count| {
-            let back_off = 16 * thread_rng().gen_range::<usize, usize, usize>(0, 4);
-
-            let iter = std::iter::repeat(0).take(back_off)
-                .chain(modulate(frame));
-
-            SendState::Sending(frame, iter, count)
+            SendState::Sending(frame, std::iter::repeat(0).take(DIFS).chain(modulate(frame)), count)
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
