@@ -34,9 +34,8 @@ pub struct MacFrame {
 }
 
 impl MacFrame {
-    pub const SRC_INDEX: usize = 0;
-    pub const DEST_INDEX: usize = Self::SRC_INDEX + 1;
-    pub const OP_INDEX: usize = Self::DEST_INDEX + 1;
+    pub const MAC_INDEX: usize = 0;
+    pub const OP_INDEX: usize = Self::MAC_INDEX + 1;
     pub const MAC_DATA_SIZE: usize = Self::OP_INDEX + 1;
 
     pub const BROADCAST_MAC: u8 = 0b11111111;
@@ -51,13 +50,15 @@ impl MacFrame {
 
     #[inline]
     fn set_src(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::SRC_INDEX] = val;
+        self.inner[Self::MAC_INDEX] &= 0b00001111;
+        self.inner[Self::MAC_INDEX] |= (val & 0b1111) << 4;
         self
     }
 
     #[inline]
     fn set_dest(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::DEST_INDEX] = val;
+        self.inner[Self::MAC_INDEX] &= 0b11110000;
+        self.inner[Self::MAC_INDEX] |= (val & 0b1111) << 0;
         self
     }
 
@@ -171,10 +172,10 @@ impl MacFrame {
     }
 
     #[inline]
-    pub fn get_src(&self) -> u8 { self.inner[Self::SRC_INDEX] }
+    pub fn get_src(&self) -> u8 { (self.inner[Self::MAC_INDEX] >> 4) & 0b1111 }
 
     #[inline]
-    pub fn get_dest(&self) -> u8 { self.inner[Self::DEST_INDEX] }
+    pub fn get_dest(&self) -> u8 { (self.inner[Self::MAC_INDEX] >> 4) & 0b1111 }
 
     #[inline]
     pub fn get_op(&self) -> u8 { (self.inner[Self::OP_INDEX] >> 0) & 0b1111 }
