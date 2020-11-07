@@ -47,7 +47,7 @@ impl Athernet {
 
             match frame.get_op() {
                 // MacFrame::OP_ACK => println!("sending ACK {:?}", tag),
-                MacFrame::OP_DATA => println!("sending DATA {:?}", tag),
+                // MacFrame::OP_DATA => println!("sending DATA {:?}", tag),
                 // MacFrame::OP_PING_REQ => println!("sending PING REQ {:?}", tag),
                 // MacFrame::OP_PING_REPLY => println!("sending RING REPLY {:?}", tag),
                 _ => {}
@@ -96,7 +96,7 @@ impl Athernet {
                 }
                 SendState::Sending(frame, _, count) => {
                     if !channel_free {
-                        println!("collision");
+                        // println!("collision");
                         if !frame.is_ack() {
                             buffer = back_off(frame, count);
                         }
@@ -115,7 +115,7 @@ impl Athernet {
                             send_state = SendState::Idle(FRAME_INTERVAL);
                         };
                     } else {
-                        println!("retransmit");
+                        // println!("retransmit");
                         buffer = back_off(frame, count);
                         send_state = SendState::Idle(0);
                     };
@@ -176,7 +176,7 @@ impl Athernet {
                             MacFrame::OP_DATA => {
                                 ack_send_sender.send(tag).unwrap();
                                 sender.send(frame).unwrap();
-                                println!("receiving DATA {:?}", tag);
+                                // println!("receiving DATA {:?}", tag);
                             }
                             MacFrame::OP_PING_REQ => {
                                 ping_sender.send(tag).unwrap();
