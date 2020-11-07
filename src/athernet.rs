@@ -43,10 +43,8 @@ impl Athernet {
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |frame: MacFrame, count| {
-            let tail = frame.get_size().saturating_sub(8) * 40;
-
             let iter = std::iter::repeat(0).take(FRAME_INTERVAL)
-                .chain(modulate(frame)).chain(std::iter::repeat(0).take(tail));
+                .chain(modulate(frame));
 
             // let tag = (frame.get_dest(), frame.get_tag());
             //
