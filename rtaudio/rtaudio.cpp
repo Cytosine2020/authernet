@@ -10,7 +10,7 @@
 #define __UNIX_JACK__
 #endif
 
-#include "RtAudio.h"
+
 #include "rtaudio_c.h"
 
 
@@ -26,7 +26,7 @@ rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
 constexpr uint32_t CHANNEL_COUNT = 1;
 constexpr uint32_t SAMPLE_FORMAT = RTAUDIO_FORMAT_SINT16;
 constexpr uint32_t SAMPLE_RATE = 48000;
-constexpr uint32_t BUFFER_SIZE = 24;
+constexpr uint32_t BUFFER_SIZE = 20;
 
 
 typedef void (*rust_callback)(void *data, int16_t *, size_t);
@@ -107,22 +107,22 @@ void print_device(rtaudio_device_info_t &device) {
         std::cout << "\tnativeFormats: ";
 
         switch (device.native_formats) {
-            case RTAUDIO_SINT8:
+            case RTAUDIO_FORMAT_SINT8:
                 std::cout << "i8";
                 break;
-            case RTAUDIO_SINT16:
+            case RTAUDIO_FORMAT_SINT16:
                 std::cout << "i16";
                 break;
-            case RTAUDIO_SINT24:
+            case RTAUDIO_FORMAT_SINT24:
                 std::cout << "i24";
                 break;
-            case RTAUDIO_SINT32:
+            case RTAUDIO_FORMAT_SINT32:
                 std::cout << "i32";
                 break;
-            case RTAUDIO_FLOAT32:
+            case RTAUDIO_FORMAT_FLOAT32:
                 std::cout << "f32";
                 break;
-            case RTAUDIO_FLOAT64:
+            case RTAUDIO_FORMAT_FLOAT64:
                 std::cout << "f64";
                 break;
             default:
