@@ -79,7 +79,7 @@ impl Athernet {
                 SendState::Idle(ref mut time) => {
                     *time = time.saturating_sub(data.len());
 
-                    if time == 0 && channel_free {
+                    if *time == 0 && channel_free {
                         if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
                             send_state = sending(MacFrame::new_ack(mac_addr, dest, tag), 0);
                         } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
