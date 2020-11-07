@@ -125,8 +125,8 @@ impl Athernet {
                 }
             }
 
-            for sample in data.iter_mut() {
-                if let SendState::Sending(frame, ref mut iter, count) = send_state {
+            if let SendState::Sending(frame, ref mut iter, count) = send_state {
+                for sample in data.iter_mut() {
                     if let Some(item) = iter.next() {
                         *sample = item;
                     } else {
@@ -134,7 +134,8 @@ impl Athernet {
                             SendState::WaitAck(frame, ACK_TIMEOUT, count)
                         } else {
                             SendState::Idle
-                        }
+                        };
+                        break;
                     };
                 };
             };
