@@ -139,7 +139,7 @@ impl Athernet {
                                 break;
                             };
                         } else {
-                            // println!("resend");
+                            // println!("retransmit");
                             buffer = back_off(frame, count);
                             send_state = SendState::Idle;
                         };

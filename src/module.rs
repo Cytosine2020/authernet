@@ -101,7 +101,7 @@ impl BitReceive {
         if self.count <= (MacFrame::MAC_DATA_SIZE + CRC_SIZE) * 8 {
             None
         } else {
-            let size = if self.inner[MacFrame::OP_INDEX] == MacFrame::OP_DATA {
+            let size = if (self.inner[MacFrame::OP_INDEX] & 0b1111) == MacFrame::OP_DATA {
                 self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1
             } else {
                 0
@@ -119,7 +119,7 @@ impl BitReceive {
 
     #[inline]
     pub fn is_self(&self) -> bool {
-        self.count < 8 || self.inner[MacFrame::SRC_INDEX] == self.mac_addr
+        self.count < 4 || (self.inner[MacFrame::MAC_INDEX] & 0b1111) == self.mac_addr
     }
 }
 
