@@ -9,9 +9,9 @@ use crate::{
 };
 
 
-const ACK_TIMEOUT: usize = 1200;
+const ACK_TIMEOUT: usize = 1300;
 const BACK_OFF_WINDOW: usize = 64;
-const FRAME_INTERVAL: usize = 64;
+const FRAME_INTERVAL: usize = 128;
 
 
 enum SendState<I> {
@@ -120,7 +120,6 @@ impl Athernet {
                                 }
                             }
                         } else {
-                            // println!("collision");
                             if !frame.is_ack() {
                                 buffer = back_off(frame, count);
                             }
@@ -139,7 +138,6 @@ impl Athernet {
                                 break;
                             };
                         } else {
-                            // println!("retransmit");
                             buffer = back_off(frame, count);
                             send_state = SendState::Idle;
                         };
