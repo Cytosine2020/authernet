@@ -26,7 +26,7 @@ rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
 constexpr uint32_t CHANNEL_COUNT = 1;
 constexpr uint32_t SAMPLE_FORMAT = RTAUDIO_FORMAT_SINT16;
 constexpr uint32_t SAMPLE_RATE = 48000;
-constexpr uint32_t BUFFER_SIZE = 20;
+constexpr uint32_t BUFFER_SIZE = 16;
 
 
 typedef void (*rust_callback)(void *data, int16_t *, size_t);
