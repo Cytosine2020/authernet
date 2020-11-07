@@ -72,7 +72,7 @@ impl Athernet {
         let mut time = std::time::SystemTime::now();
 
         let stream = create_output_stream(move |data: &mut [i16]| {
-            let channel_free = guard.load(Ordering::SeqCst);
+            let mut channel_free = guard.load(Ordering::SeqCst);
 
             if let Some((_, ref mut time, _)) = buffer {
                 *time = time.saturating_sub(data.len());
@@ -141,6 +141,7 @@ impl Athernet {
                         } else {
                             // println!("retransmit");
                             buffer = back_off(frame, count);
+                            channel_free = false;
                             send_state = SendState::Idle;
                         };
                     }
