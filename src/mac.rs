@@ -34,11 +34,13 @@ pub struct MacFrame {
 }
 
 impl MacFrame {
-    pub const MAC_INDEX: usize = 0;
-    pub const OP_INDEX: usize = Self::MAC_INDEX + 1;
-    pub const MAC_DATA_SIZE: usize = Self::OP_INDEX + 1;
+    pub const SRC_INDEX: usize = 0;
+    pub const DEST_INDEX: usize = Self::SRC_INDEX + 1;
+    pub const OP_INDEX: usize = Self::DEST_INDEX + 1;
+    pub const TAG_INDEX: usize = Self::OP_INDEX + 1;
+    pub const MAC_DATA_SIZE: usize = Self::TAG_INDEX + 1;
 
-    pub const BROADCAST_MAC: u8 = 0b1111;
+    pub const BROADCAST_MAC: u8 = 0b11111111;
 
     pub const OP_DATA: u8 = 0b0000;
     pub const OP_PING_REQ: u8 = 0b0001;
@@ -50,29 +52,25 @@ impl MacFrame {
 
     #[inline]
     fn set_src(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::MAC_INDEX] &= 0b11110000;
-        self.inner[Self::MAC_INDEX] |= (val & 0b1111) << 0;
+        self.inner[Self::SRC_INDEX] = val;
         self
     }
 
     #[inline]
     fn set_dest(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::MAC_INDEX] &= 0b00001111;
-        self.inner[Self::MAC_INDEX] |= (val & 0b1111) << 4;
+        self.inner[Self::DEST_INDEX] = val;
         self
     }
 
     #[inline]
     fn set_op(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::OP_INDEX] &= 0b11110000;
-        self.inner[Self::OP_INDEX] |= (val & 0b1111) << 0;
+        self.inner[Self::OP_INDEX] = val;
         self
     }
 
     #[inline]
     fn set_tag(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::OP_INDEX] &= 0b00001111;
-        self.inner[Self::OP_INDEX] |= (val & 0b1111) << 4;
+        self.inner[Self::TAG_INDEX] = val;
         self
     }
 
@@ -172,16 +170,16 @@ impl MacFrame {
     }
 
     #[inline]
-    pub fn get_src(&self) -> u8 { (self.inner[Self::MAC_INDEX] >> 0) & 0b1111 }
+    pub fn get_src(&self) -> u8 { self.inner[Self::SRC_INDEX] }
 
     #[inline]
-    pub fn get_dest(&self) -> u8 { (self.inner[Self::MAC_INDEX] >> 4) & 0b1111 }
+    pub fn get_dest(&self) -> u8 { self.inner[Self::DEST_INDEX] }
 
     #[inline]
-    pub fn get_op(&self) -> u8 { (self.inner[Self::OP_INDEX] >> 0) & 0b1111 }
+    pub fn get_op(&self) -> u8 { self.inner[Self::OP_INDEX] }
 
     #[inline]
-    pub fn get_tag(&self) -> u8 { (self.inner[Self::OP_INDEX] >> 4) & 0b1111 }
+    pub fn get_tag(&self) -> u8 { self.inner[Self::TAG_INDEX] }
 
     #[inline]
     pub fn to_broadcast(&self) -> bool { self.get_dest() == MacFrame::BROADCAST_MAC }
@@ -194,10 +192,6 @@ impl MacFrame {
 
     #[inline]
     pub fn check(&self, mac_addr: u8) -> bool {
-        // if crc_calculate(self.inner[..self.get_size() + CRC_SIZE].iter().cloned()) != 0 {
-        //     println!("crc failed");
-        // }
-
         crc_calculate(self.inner[..self.get_size() + CRC_SIZE].iter().cloned()) == 0 &&
             (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
     }
@@ -253,17 +247,15 @@ impl MacLayer {
             let tag = mac_data.get_tag();
             let recv_tag = &mut self.recv_tag[src as usize];
 
-            if (src, tag) == (self.dest, *recv_tag & 0b1111) {
+            if (src, tag) == (self.dest, *recv_tag) {
                 *recv_tag = recv_tag.wrapping_add(1);
                 return Ok(mac_data.unwrap());
             }
         }
     }
 
-    pub fn ping(&mut self, mut tag: u8)
+    pub fn ping(&mut self, tag: u8)
                 -> Result<Option<std::time::Duration>, Box<dyn std::error::Error>> {
-        tag &= 0b1111;
-
         let time_out = std::time::Duration::from_secs(2);
 
         let start = std::time::SystemTime::now();
