@@ -60,7 +60,7 @@ impl Athernet {
             let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 16) +
                 (1 << std::cmp::min(3, count));
 
-            println!("back off {:?}", (frame.get_dest(), frame.get_tag(), back_off));
+            // println!("back off {:?}", (frame.get_dest(), frame.get_tag(), back_off));
 
             Some((frame, back_off * BACK_OFF_WINDOW, count))
         };
@@ -123,7 +123,7 @@ impl Athernet {
                                 }
                             }
                         } else {
-                            println!("collision");
+                            // println!("collision");
                             if !frame.is_ack() {
                                 buffer = back_off(frame, count);
                             }
@@ -142,7 +142,7 @@ impl Athernet {
                                 break;
                             };
                         } else {
-                            println!("retransmit");
+                            // println!("retransmit");
                             buffer = back_off(frame, count);
                             send_state = SendState::Idle(0);
                         };
