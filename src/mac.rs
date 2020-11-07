@@ -194,6 +194,10 @@ impl MacFrame {
 
     #[inline]
     pub fn check(&self, mac_addr: u8) -> bool {
+        if crc_calculate(self.inner[..self.get_size() + CRC_SIZE].iter().cloned()) != 0 {
+            println!("crc failed");
+        }
+
         crc_calculate(self.inner[..self.get_size() + CRC_SIZE].iter().cloned()) == 0 &&
             (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
     }
