@@ -120,6 +120,7 @@ impl Athernet {
                                 }
                             }
                         } else {
+                            // println!("collision");
                             if !frame.is_ack() {
                                 buffer = back_off(frame, count);
                             }
@@ -138,6 +139,7 @@ impl Athernet {
                                 break;
                             };
                         } else {
+                            // println!("resend");
                             buffer = back_off(frame, count);
                             send_state = SendState::Idle;
                         };

@@ -133,7 +133,6 @@ pub struct Demodulator {
     state: DemodulateState,
     last_prod: i64,
     moving_average: i64,
-    jammed: usize,
     mac_addr: u8,
 }
 
@@ -170,12 +169,11 @@ impl Demodulator {
             last_prod: 0,
             moving_average: 0,
             mac_addr,
-            jammed: 0,
         }
     }
 
     pub fn is_active(&self) -> bool {
-        if self.jammed > 0 || self.moving_average > Self::JAMMING_THRESHOLD { return true; }
+        if self.moving_average > Self::JAMMING_THRESHOLD { return true; }
 
         if let DemodulateState::RECEIVE(_, receiver) = self.state {
             !receiver.is_self()
@@ -185,8 +183,6 @@ impl Demodulator {
     }
 
     pub fn push_back(&mut self, item: i16) -> Option<MacFrame> {
-        self.jammed = self.jammed.saturating_sub(1);
-
         if self.window.len() == Self::PREAMBLE_LEN { self.window.pop_front(); }
         self.window.push_back(item);
 
@@ -219,12 +215,7 @@ impl Demodulator {
                 self.state = if count == SYMBOL_LEN {
                     let prod = self.section_product(self.window.len() - SYMBOL_LEN);
 
-                    if prod.abs() < (self.moving_average << 10) {
-                        self.jammed = 64;
-                        self.state = DemodulateState::WAITE;
-                        self.window.clear();
-                        return None;
-                    } else if let Some(result) = buffer.push(prod > 0) {
+                    if let Some(result) = buffer.push(prod > 0) {
                         self.state = DemodulateState::WAITE;
                         self.window.clear();
                         return result;
