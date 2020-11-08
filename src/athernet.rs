@@ -47,6 +47,8 @@ impl Athernet {
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
+            if count > 20 { println!("link error"); }
+
             let maximum = 1 << std::cmp::min(6, count);
             let back_off = if frame.is_data() {
                 thread_rng().gen_range::<usize, usize, usize>(0, maximum)
@@ -148,7 +150,7 @@ impl Athernet {
         ping_sender: Sender<(u8, u8)>,
     ) -> Result<(Receiver<MacFrame>, Receiver<(u8, u8)>, Stream), Box<dyn std::error::Error>>
     {
-        let mut demodulator = Demodulator::new(mac_addr);
+        let mut demodulator = Demodulator::new();
 
         let (sender, receiver) = mpsc::channel();
         let (ping_send, ping_recv) = mpsc::channel();
