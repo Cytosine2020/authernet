@@ -16,6 +16,7 @@ opt-level = 3
 [dependencies]
 lazy_static = "1.4"
 rand = "0.7"
+crc16 = "0.4"
 
 [build-dependencies]
 cmake = "0.1"

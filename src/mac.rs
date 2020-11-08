@@ -1,31 +1,18 @@
-use lazy_static;
 use crate::athernet::Athernet;
+use crc16;
 
 
 pub const DATA_PACK_MAX: usize = 55;
-pub const CRC_SIZE: usize = 1;
+pub const CRC_SIZE: usize = 2;
 pub const MAC_FRAME_MAX: usize = MacFrame::MAC_DATA_SIZE + DATA_PACK_MAX + CRC_SIZE;
 
 pub type DataPack = [u8; DATA_PACK_MAX];
 pub type MacFrameRaw = [u8; MAC_FRAME_MAX];
 
+fn crc_calculate<I: Iterator<Item=u8>>(iter: I) -> u16 {
+    let buffer = iter.collect::<Vec::<_>>();
 
-lazy_static!(
-    static ref CRC_TABLE: [u8; 256] = {
-        let mut table = [0; 256];
-
-        for i in 0..256 {
-            table[i] = (0..=8).fold(i as u8, |crc, _| {
-                (crc << 1) ^ if (crc & 0x80) > 0 { 0x31 } else { 0 }
-            });
-        }
-
-        table
-    };
-);
-
-fn crc_calculate<I: Iterator<Item=u8>>(iter: I) -> u8 {
-    iter.fold(0, |crc, byte| CRC_TABLE[(crc ^ byte) as usize])
+    crc16::State::<crc16::ARC>::calculate(buffer.as_slice())
 }
 
 #[derive(Copy, Clone)]
@@ -86,7 +73,9 @@ impl MacFrame {
     #[inline]
     fn generate_crc(&mut self) -> &mut Self {
         let size = self.get_size();
-        self.inner[size] = crc_calculate(self.inner[..size].iter().cloned());
+        let crc = crc_calculate(self.inner[..size].iter().cloned());
+        self.inner[size + 0] = ((crc >> 0) & 0b11111111) as u8;
+        self.inner[size + 1] = ((crc >> 8) & 0b11111111) as u8;
         self
     }
 
