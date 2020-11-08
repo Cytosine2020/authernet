@@ -9,9 +9,9 @@ use crate::{
 };
 
 
-const ACK_TIMEOUT: usize = 1300;
-const BACK_OFF_WINDOW: usize = 128;
-const FRAME_INTERVAL: usize = 64;
+const ACK_TIMEOUT: usize = 1100;
+const BACK_OFF_WINDOW: usize = 50;
+const FRAME_INTERVAL: usize = 50;
 
 
 enum SendState<I> {
@@ -43,25 +43,12 @@ impl Athernet {
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |frame: MacFrame, count| {
-            // let tag = (frame.get_dest(), frame.get_tag());
-            //
-            // match frame.get_op() {
-            //     MacFrame::OP_ACK => println!("sending ACK {:?}", tag),
-            //     MacFrame::OP_DATA => println!("sending DATA {:?}", tag),
-            //     MacFrame::OP_PING_REQ => println!("sending PING REQ {:?}", tag),
-            //     MacFrame::OP_PING_REPLY => println!("sending RING REPLY {:?}", tag),
-            //     _ => {}
-            // }
-
             SendState::Sending(frame, modulate(frame), count)
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
-            let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 16) +
-                (1 << std::cmp::min(3, count));
-
-            // println!("back off {:?}", (frame.get_dest(), frame.get_tag(), back_off));
-
+            let back_off = thread_rng().gen_range::<usize, usize, usize>(0, 4) +
+                (1 << std::cmp::min(5, count));
             Some((frame, back_off * BACK_OFF_WINDOW, count))
         };
 
@@ -109,7 +96,6 @@ impl Athernet {
                             };
                         };
                     } else {
-                        // println!("collision");
                         if !frame.is_ack() {
                             buffer = back_off(frame, count);
                         }
@@ -128,7 +114,6 @@ impl Athernet {
                             send_state = SendState::Idle(FRAME_INTERVAL);
                         };
                     } else {
-                        // println!("retransmit");
                         buffer = back_off(frame, count);
                         send_state = SendState::Idle(0);
                     };
@@ -169,20 +154,16 @@ impl Athernet {
                         match frame.get_op() {
                             MacFrame::OP_ACK => {
                                 ack_recv_sender.send(tag).unwrap();
-                                // println!("receiving ACK {:?}", tag);
                             }
                             MacFrame::OP_DATA => {
                                 ack_send_sender.send(tag).unwrap();
                                 sender.send(frame).unwrap();
-                                // println!("receiving DATA {:?}", tag);
                             }
                             MacFrame::OP_PING_REQ => {
                                 ping_sender.send(tag).unwrap();
-                                // println!("receiving PING REQ {:?}", tag);
                             }
                             MacFrame::OP_PING_REPLY => {
                                 ping_send.send(tag).unwrap();
-                                // println!("receiving PING REPLY {:?}", tag);
                             }
                             _ => {}
                         }

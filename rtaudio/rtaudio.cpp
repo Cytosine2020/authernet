@@ -42,16 +42,16 @@ struct Stream {
 };
 
 rtaudio_static_inline void rtaudio_check_stream_status(rtaudio_stream_status_t status) {
-    switch (status) {
-        case RTAUDIO_STATUS_INPUT_OVERFLOW:
-            rtaudio_warn("input overflow!");
-            break;
-        case RTAUDIO_STATUS_OUTPUT_UNDERFLOW:
-            rtaudio_warn("output underflow!");
-            break;
-        default:
-            break;
-    }
+//    switch (status) {
+//        case RTAUDIO_STATUS_INPUT_OVERFLOW:
+//            rtaudio_warn("input overflow!");
+//            break;
+//        case RTAUDIO_STATUS_OUTPUT_UNDERFLOW:
+//            rtaudio_warn("output underflow!");
+//            break;
+//        default:
+//            break;
+//    }
 }
 
 int output_callback(void *out_buffer_, void *in_buffer, unsigned int size, double time,

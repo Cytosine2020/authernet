@@ -193,6 +193,9 @@ impl MacFrame {
     pub fn is_data(&self) -> bool { self.get_op() == MacFrame::OP_DATA }
 
     #[inline]
+    pub fn is_ping_request(&self) -> bool { self.get_op() == MacFrame::OP_PING_REQ }
+
+    #[inline]
     pub fn check(&self, mac_addr: u8) -> bool {
         crc_calculate(self.inner[..self.get_size() + CRC_SIZE].iter().cloned()) == 0 &&
             (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
@@ -260,7 +263,7 @@ impl MacLayer {
                 -> Result<Option<std::time::Duration>, Box<dyn std::error::Error>> {
         tag &= 0b1111;
 
-        let time_out = std::time::Duration::from_secs(2);
+        let time_out = std::time::Duration::from_secs(1);
 
         let start = std::time::SystemTime::now();
 
