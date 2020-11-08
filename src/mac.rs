@@ -2,14 +2,32 @@ use crate::athernet::Athernet;
 use crc16;
 
 
-pub const DATA_PACK_MAX: usize = 55;
+pub const DATA_PACK_MAX: usize = 54;
 pub const CRC_SIZE: usize = 2;
 pub const MAC_FRAME_MAX: usize = MacFrame::MAC_DATA_SIZE + DATA_PACK_MAX + CRC_SIZE;
 
 pub type DataPack = [u8; DATA_PACK_MAX];
 pub type MacFrameRaw = [u8; MAC_FRAME_MAX];
 
-fn crc_calculate<I: Iterator<Item=u8>>(iter: I) -> u16 {
+lazy_static!(
+    static ref CRC_TABLE: [u8; 256] = {
+        let mut table = [0; 256];
+
+        for i in 0..256 {
+            table[i] = (0..=8).fold(i as u8, |crc, _| {
+                (crc << 1) ^ if (crc & 0x80) > 0 { 0x31 } else { 0 }
+            });
+        }
+
+        table
+    };
+);
+
+fn crc8_calculate<I: Iterator<Item=u8>>(iter: I) -> u8 {
+    iter.fold(0, |crc, byte| CRC_TABLE[(crc ^ byte) as usize])
+}
+
+fn crc16_calculate<I: Iterator<Item=u8>>(iter: I) -> u16 {
     let buffer = iter.collect::<Vec::<_>>();
 
     crc16::State::<crc16::ARC>::calculate(buffer.as_slice())
@@ -73,10 +91,17 @@ impl MacFrame {
     #[inline]
     fn generate_crc(&mut self) -> &mut Self {
         let size = self.get_size();
-        let crc = crc_calculate(self.inner[..size].iter().cloned());
-        self.inner[size + 0] = ((crc >> 0) & 0b11111111) as u8;
-        self.inner[size + 1] = ((crc >> 8) & 0b11111111) as u8;
-        self
+
+        if self.is_data() {
+            let crc = crc16_calculate(self.inner[..size].iter().cloned());
+            self.inner[size + 0] = ((crc >> 0) & 0b11111111) as u8;
+            self.inner[size + 1] = ((crc >> 8) & 0b11111111) as u8;
+            self
+        } else {
+            let size = self.get_size();
+            self.inner[size] = crc8_calculate(self.inner[..size].iter().cloned());
+            self
+        }
     }
 
     #[inline]
@@ -152,6 +177,20 @@ impl MacFrame {
     }
 
     #[inline]
+    pub fn get_crc_size(&self) -> usize {
+        if self.is_data() {
+            2
+        } else {
+            1
+        }
+    }
+
+    #[inline]
+    pub fn get_total_size(&self) -> usize {
+        self.get_size() + self.get_crc_size()
+    }
+
+    #[inline]
     pub fn get_payload_size(&self) -> usize {
         if self.is_data() {
             self.inner[Self::MAC_DATA_SIZE] as usize
@@ -186,8 +225,13 @@ impl MacFrame {
 
     #[inline]
     pub fn check(&self, mac_addr: u8) -> bool {
-        crc_calculate(self.inner[..self.get_size() + CRC_SIZE].iter().cloned()) == 0 &&
-            (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
+        let crc_flag = if self.is_data() {
+            crc16_calculate(self.inner[..self.get_total_size()].iter().cloned()) == 0
+        } else {
+            crc8_calculate(self.inner[..self.get_total_size()].iter().cloned()) == 0
+        };
+
+        crc_flag && (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
     }
 
     #[inline]

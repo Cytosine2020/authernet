@@ -73,7 +73,7 @@ fn pulse_shaping<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
 }
 
 pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
-    let size = buffer.get_size() + CRC_SIZE;
+    let size = buffer.get_total_size();
     let raw = buffer.into_raw();
 
     pulse_shaping(BARKER.iter().cloned().chain(ByteToBitIter::from(
@@ -97,14 +97,14 @@ impl BitReceive {
         self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
         self.count += 1;
 
-        if self.count <= (MacFrame::MAC_DATA_SIZE + CRC_SIZE) * 8 {
+        if self.count <= (MacFrame::MAC_DATA_SIZE + 1) * 8 {
             None
         } else {
             let size = if (self.inner[MacFrame::OP_INDEX] & 0b1111) == MacFrame::OP_DATA {
-                self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1
+                self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1 + 2
             } else {
-                0
-            } + MacFrame::MAC_DATA_SIZE + CRC_SIZE;
+                1
+            } + MacFrame::MAC_DATA_SIZE;
 
             if size > MAC_FRAME_MAX { return Some(None); }
 
