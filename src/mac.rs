@@ -2,7 +2,7 @@ use lazy_static;
 use crate::athernet::Athernet;
 
 
-pub const DATA_PACK_MAX: usize = 60;
+pub const DATA_PACK_MAX: usize = 55;
 pub const CRC_SIZE: usize = 1;
 pub const MAC_FRAME_MAX: usize = MacFrame::MAC_DATA_SIZE + DATA_PACK_MAX + CRC_SIZE;
 

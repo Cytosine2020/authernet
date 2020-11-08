@@ -202,6 +202,12 @@ impl Demodulator {
                 }
             }
             DemodulateState::RECEIVE(mut count, mut buffer) => {
+                if self.moving_average > Self::JAMMING_THRESHOLD {
+                    self.state = DemodulateState::WAITE;
+                    self.window.clear();
+                    return None;
+                }
+
                 count += 1;
 
                 self.state = if count == SYMBOL_LEN {
