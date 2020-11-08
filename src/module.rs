@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use lazy_static;
-use crate::mac::{MAC_FRAME_MAX, CRC_SIZE, MacFrame, MacFrameRaw};
+use crate::mac::{MAC_FRAME_MAX, MacFrame, MacFrameRaw};
 
 
 const SYMBOL_LEN: usize = 5;
