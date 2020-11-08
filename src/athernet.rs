@@ -9,12 +9,13 @@ use crate::{
 };
 
 
-const ACK_TIMEOUT: usize = 1300;
+const ACK_TIMEOUT: usize = 1100;
 const BACK_OFF_WINDOW: usize = 50;
+const FRAME_INTERVAL: usize = 50;
 
 
 enum SendState<I> {
-    Idle,
+    Idle(usize),
     Sending(MacFrame, I, usize),
     WaitAck(MacFrame, usize, usize),
 }
@@ -38,7 +39,7 @@ impl Athernet {
     ) -> Result<(Sender<MacFrame>, Stream), Box<dyn std::error::Error>> {
         let (sender, receiver) = mpsc::channel();
 
-        let mut send_state = SendState::Idle;
+        let mut send_state = SendState::Idle(0);
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |frame: MacFrame, count| {
@@ -46,9 +47,9 @@ impl Athernet {
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
-            if count > 40 { println!("link error"); }
+            if count > 50 { println!("link error"); }
 
-            let maximum = 1 << std::cmp::min(4, count);
+            let maximum = 1 << std::cmp::min(5, count);
             let back_off = if frame.is_data() {
                 thread_rng().gen_range::<usize, usize, usize>(0, maximum)
             } else {
@@ -69,8 +70,10 @@ impl Athernet {
             };
 
             match send_state {
-                SendState::Idle => {
-                    if channel_free {
+                SendState::Idle(ref mut time) => {
+                    *time = time.saturating_sub(data.len());
+
+                    if *time == 0 && channel_free {
                         if let Some((dest, tag)) = ack_send_receiver.try_iter().next() {
                             send_state = sending(MacFrame::new_ack(mac_addr, dest, tag), 0);
                         } else if let Some((dest, tag)) = ping_receiver.try_iter().next() {
@@ -97,7 +100,7 @@ impl Athernet {
                                     && !frame.to_broadcast() {
                                     SendState::WaitAck(frame, ACK_TIMEOUT, count)
                                 } else {
-                                    SendState::Idle
+                                    SendState::Idle(0)
                                 };
                                 break;
                             };
@@ -108,7 +111,7 @@ impl Athernet {
                         } else if !frame.is_ack() {
                             buffer = Some((frame, 0, count));
                         }
-                        send_state = SendState::Idle;
+                        send_state = SendState::Idle(0);
                     };
                 }
                 SendState::WaitAck(frame, ref mut time, count) => {
@@ -120,11 +123,11 @@ impl Athernet {
                         }) {
                             bit_count += frame.get_payload_size() * 8;
 
-                            send_state = SendState::Idle;
+                            send_state = SendState::Idle(FRAME_INTERVAL);
                         };
                     } else {
                         buffer = back_off(frame, count);
-                        send_state = SendState::Idle;
+                        send_state = SendState::Idle(0);
                     };
                 }
             }
