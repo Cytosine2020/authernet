@@ -101,7 +101,8 @@ impl BitReceive {
         if self.count <= (MacFrame::MAC_DATA_SIZE + CRC_SIZE) * 8 {
             None
         } else {
-            let size = if (self.inner[MacFrame::OP_INDEX] & 0b1111) == MacFrame::OP_DATA {
+            let op = self.inner[MacFrame::OP_INDEX] & 0b1111;
+            let size = if op == MacFrame::OP_DATA || op == MacFrame::OP_PING_REQ {
                 self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1
             } else {
                 0

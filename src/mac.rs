@@ -122,12 +122,15 @@ impl MacFrame {
     #[inline]
     pub fn new_ping_request(src: u8, dest: u8, tag: u8) -> Self {
         let mut result = Self::new();
+        let mut pay_load = [0; DATA_PACK_MAX];
+        pay_load[0] = 8;
 
         result
             .set_src(src)
             .set_dest(dest)
             .set_op(Self::OP_PING_REQ)
             .set_tag(tag)
+            .set_pay_load(&pay_load)
             .generate_crc();
 
         result
@@ -155,7 +158,7 @@ impl MacFrame {
 
     #[inline]
     pub fn get_size(&self) -> usize {
-        Self::MAC_DATA_SIZE + if self.is_data() {
+        Self::MAC_DATA_SIZE + if self.is_data() || self.is_ping_request() {
             self.inner[Self::MAC_DATA_SIZE] as usize + 1
         } else {
             0
