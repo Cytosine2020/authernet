@@ -47,7 +47,7 @@ impl Athernet {
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
-            let maximum = 1 << std::cmp::min(7, count);
+            let maximum = 1 << std::cmp::min(6, count);
             let back_off = if frame.is_data() {
                 thread_rng().gen_range::<usize, usize, usize>(0, maximum)
             } else {
@@ -84,7 +84,9 @@ impl Athernet {
                         } else if let Some(frame) = receiver.try_iter().next() {
                             send_state = sending(frame, 0);
                         };
-                    };
+                    } else {
+                        for _ in ack_send_receiver.try_iter() {}
+                    }
                 }
                 SendState::Sending(frame, ref mut iter, count) => {
                     if channel_free {
