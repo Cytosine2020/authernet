@@ -47,7 +47,7 @@ impl Athernet {
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
-            if count > 20 { println!("link error"); }
+            if count > 40 { println!("link error"); }
 
             let maximum = 1 << std::cmp::min(6, count);
             let back_off = if frame.is_data() {
