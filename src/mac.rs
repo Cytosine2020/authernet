@@ -122,15 +122,12 @@ impl MacFrame {
     #[inline]
     pub fn new_ping_request(src: u8, dest: u8, tag: u8) -> Self {
         let mut result = Self::new();
-        let mut pay_load = [0; DATA_PACK_MAX];
-        pay_load[0] = 8;
 
         result
             .set_src(src)
             .set_dest(dest)
             .set_op(Self::OP_PING_REQ)
             .set_tag(tag)
-            .set_pay_load(&pay_load)
             .generate_crc();
 
         result
@@ -158,7 +155,7 @@ impl MacFrame {
 
     #[inline]
     pub fn get_size(&self) -> usize {
-        Self::MAC_DATA_SIZE + if self.is_data() || self.is_ping_request() {
+        Self::MAC_DATA_SIZE + if self.is_data() {
             self.inner[Self::MAC_DATA_SIZE] as usize + 1
         } else {
             0
@@ -262,29 +259,27 @@ impl MacLayer {
         }
     }
 
-    pub fn ping(&mut self, mut tag: u8)
+    pub fn ping(&mut self)
                 -> Result<Option<std::time::Duration>, Box<dyn std::error::Error>> {
-        tag &= 0b1111;
+        let send_tag = &mut self.send_tag[self.dest as usize];
 
-        let time_out = std::time::Duration::from_secs(1);
+        let time_out = std::time::Duration::from_secs(2);
 
         let start = std::time::SystemTime::now();
 
-        self.athernet.send(MacFrame::new_ping_request(self.mac_addr, self.dest, tag))?;
+        self.athernet.send(MacFrame::new_ping_request(self.mac_addr, self.dest, *send_tag))?;
 
-        let time = match self.athernet.ping_recv_timeout(time_out) {
-            Ok(pair) => {
-                if pair == (self.dest, tag) {
-                    Some(start.elapsed()?)
-                } else {
-                    Err("unexpected reply!")?;
-                    None
+        loop {
+            match self.athernet.ping_recv_timeout(time_out - start.elapsed()?) {
+                Ok(pair) => {
+                    if pair == (self.dest, *send_tag & 0b1111) {
+                        *send_tag = send_tag.wrapping_add(1);
+                        return Ok(Some(start.elapsed()?));
+                    }
                 }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(),
-        };
-
-        Ok(time)
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(),
+            };
+        }
     }
 }

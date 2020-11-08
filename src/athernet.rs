@@ -47,8 +47,8 @@ impl Athernet {
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
-            let maximum = 1 << std::cmp::min(5, count) + 1;
-            let back_off = thread_rng().gen_range::<usize, usize, usize>(1, maximum);
+            let maximum = 1 << std::cmp::min(5, count);
+            let back_off = thread_rng().gen_range::<usize, usize, usize>(0, maximum);
             Some((frame, back_off * BACK_OFF_WINDOW, count))
         };
 
@@ -87,7 +87,8 @@ impl Athernet {
                             if let Some(item) = iter.next() {
                                 *sample = item;
                             } else {
-                                send_state = if frame.is_data() && !frame.to_broadcast() {
+                                send_state = if (frame.is_data() || frame.is_ping_request())
+                                    && !frame.to_broadcast() {
                                     SendState::WaitAck(frame, ACK_TIMEOUT, count)
                                 } else {
                                     SendState::Idle(0)
@@ -96,7 +97,7 @@ impl Athernet {
                             };
                         };
                     } else {
-                        if frame.is_data() {
+                        if frame.is_data() || frame.is_ping_request() {
                             buffer = back_off(frame, count);
                         } else if !frame.is_ack() {
                             buffer = Some((frame, 0, count));
@@ -165,6 +166,7 @@ impl Athernet {
                                 ping_sender.send(tag).unwrap();
                             }
                             MacFrame::OP_PING_REPLY => {
+                                ack_recv_sender.send(tag).unwrap();
                                 ping_send.send(tag).unwrap();
                             }
                             _ => {}
