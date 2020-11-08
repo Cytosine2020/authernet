@@ -10,7 +10,7 @@ use crate::{
 
 
 const ACK_TIMEOUT: usize = 1100;
-const BACK_OFF_WINDOW: usize = 50;
+const BACK_OFF_WINDOW: usize = 480;
 const FRAME_INTERVAL: usize = 50;
 
 
@@ -47,8 +47,8 @@ impl Athernet {
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
-            let maximum = 1 << std::cmp::min(5, count);
-            let back_off = thread_rng().gen_range::<usize, usize, usize>(0, maximum);
+            let maximum = 1 << std::cmp::min(5, count) + 1;
+            let back_off = thread_rng().gen_range::<usize, usize, usize>(1, maximum);
             Some((frame, back_off * BACK_OFF_WINDOW, count))
         };
 
@@ -96,8 +96,10 @@ impl Athernet {
                             };
                         };
                     } else {
-                        if !frame.is_ack() {
+                        if frame.is_data() {
                             buffer = back_off(frame, count);
+                        } else if !frame.is_ack() {
+                            buffer = Some((frame, 0, count));
                         }
                         send_state = SendState::Idle(0);
                     };
