@@ -47,7 +47,7 @@ impl Athernet {
         };
 
         let back_off = move |frame: MacFrame, count: usize| {
-            let maximum = 1 << std::cmp::min(4, count);
+            let maximum = 1 << std::cmp::min(7, count);
             let back_off = if frame.is_data() {
                 thread_rng().gen_range::<usize, usize, usize>(0, maximum)
             } else {
