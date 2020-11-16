@@ -28,7 +28,7 @@ fn crc8_calculate<I: Iterator<Item=u8>>(iter: I) -> u8 {
 }
 
 fn crc16_calculate<I: Iterator<Item=u8>>(iter: I) -> u16 {
-    let buffer = iter.collect::<Vec::<_>>();
+    let buffer = iter.collect::<Vec<_>>();
 
     crc16::State::<crc16::ARC>::calculate(buffer.as_slice())
 }

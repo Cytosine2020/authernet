@@ -1,5 +1,4 @@
-use std::ffi::c_void;
-use std::ops::Deref;
+use std::{ffi::c_void, ops::Deref};
 
 
 #[derive(std::fmt::Debug)]
@@ -42,6 +41,7 @@ extern "C" {
 
 pub fn print_hosts() { unsafe { rtaudio_print_hosts() } }
 
+#[inline(always)]
 unsafe extern "C" fn callback_adapter<F>(data: *mut c_void, buffer: *mut i16, size: usize)
     where F: FnMut(&mut [i16]) + Send + 'static
 {

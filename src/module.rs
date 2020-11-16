@@ -1,9 +1,8 @@
 use std::collections::VecDeque;
-use lazy_static;
 use crate::mac::{MAC_FRAME_MAX, MacFrame, MacFrameRaw};
 
 
-const SYMBOL_LEN: usize = 5;
+const SYMBOL_LEN: usize = 4;
 const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
@@ -86,11 +85,12 @@ pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
 struct BitReceive {
     inner: MacFrameRaw,
     count: usize,
+    mac_addr: u8,
 }
 
 impl BitReceive {
     #[inline]
-    pub fn new() -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0 } }
+    pub fn new(mac_addr: u8) -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0, mac_addr } }
 
     #[inline]
     pub fn push(&mut self, bit: bool) -> Option<Option<MacFrame>> {
@@ -115,6 +115,11 @@ impl BitReceive {
             }
         }
     }
+
+    #[inline]
+    pub fn is_self(&self) -> bool {
+        self.count < 4 || (self.inner[MacFrame::MAC_INDEX] & 0b1111) == self.mac_addr
+    }
 }
 
 enum DemodulateState {
@@ -127,6 +132,7 @@ pub struct Demodulator {
     state: DemodulateState,
     last_prod: i64,
     moving_average: i64,
+    mac_addr: u8,
 }
 
 impl Demodulator {
@@ -155,20 +161,21 @@ impl Demodulator {
         (last * (Self::MOVING_AVERAGE - 1) + new) / Self::MOVING_AVERAGE
     }
 
-    pub fn new() -> Self {
+    pub fn new(mac_addr: u8) -> Self {
         Self {
             window: VecDeque::with_capacity(Self::PREAMBLE_LEN),
             state: DemodulateState::WAITE,
             last_prod: 0,
             moving_average: 0,
+            mac_addr,
         }
     }
 
     pub fn is_active(&self) -> bool {
         if self.moving_average > Self::JAMMING_THRESHOLD { return true; }
 
-        if let DemodulateState::RECEIVE(_, _) = self.state {
-            true
+        if let DemodulateState::RECEIVE(_, receiver) = self.state {
+            !receiver.is_self()
         } else {
             false
         }
@@ -196,7 +203,7 @@ impl Demodulator {
 
                         if *bit == (prod > 0) { 1 } else { 0 }
                     }).sum::<usize>() {
-                        self.state = DemodulateState::RECEIVE(0, BitReceive::new());
+                        self.state = DemodulateState::RECEIVE(0, BitReceive::new(self.mac_addr));
                         prod = 0;
                     }
                 }

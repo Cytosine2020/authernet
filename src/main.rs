@@ -64,36 +64,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut perf = false;
     let mut wait = 0;
 
-    loop {
-        if let Some(command_) = args.next() {
-            let command = command_.as_bytes();
+    while let Some(command_) = args.next() {
+        let command = command_.as_bytes();
 
-            if command[0] as char != '-' || command.len() != 2 {
-                return Err(String::from(
-                    format!("unknown command: {:?}", command_).to_owned()
-                ).into());
-            }
+        if command[0] as char != '-' || command.len() != 2 {
+            return Err(String::from(
+                format!("unknown command: {:?}", command_).to_owned()
+            ).into());
+        }
 
-            match command[1] as char {
-                'p' => commands.push(Command::Ping),
-                'e' => perf = true,
-                _ => {
-                    if let Some(arg) = args.next() {
-                        match command[1] as char {
-                            's' => commands.push(Command::Send(arg)),
-                            'r' => commands.push(Command::Recv(arg)),
-                            'w' => wait = arg.parse::<u64>()?,
-                            _ => return Err(String::from(
-                                format!("unknown command: {:?}", command_).to_owned()
-                            ).into()),
-                        }
-                    } else {
-                        Err(format!("command {:?} need parameter!", command))?;
+        match command[1] as char {
+            'p' => commands.push(Command::Ping),
+            'e' => perf = true,
+            _ => {
+                if let Some(arg) = args.next() {
+                    match command[1] as char {
+                        's' => commands.push(Command::Send(arg)),
+                        'r' => commands.push(Command::Recv(arg)),
+                        'w' => wait = arg.parse::<u64>()?,
+                        _ => return Err(String::from(
+                            format!("unknown command: {:?}", command_).to_owned()
+                        ).into()),
                     }
+                } else {
+                    Err(format!("command {:?} need parameter!", command))?;
                 }
             }
-        } else {
-            break;
         }
     }
 

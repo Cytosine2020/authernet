@@ -4,17 +4,22 @@
 
 #if defined(__APPLE__)
 #define __MACOSX_CORE__
-#endif
-
-#if defined(__linux__)
+#elif defined(__linux__)
 #define __UNIX_JACK__
+#else
+#error "paltform not supported!"
 #endif
 
 
 #include "rtaudio_c.h"
 
+#ifdef __DEBUG__
+#define rtaudio_static_inline
+#else
+#define rtaudio_static_inline static inline __attribute__((always_inline))
+#endif
 
-#define rtaudio_static_inline static inline
+#define rtaudio_unused __attribute__((unused))
 
 rtaudio_static_inline void _warn(const char *file, int line, const char *msg) {
     fprintf(stderr, "Warn at file %s, line %d: %s\n", file, line, msg);
@@ -31,34 +36,34 @@ constexpr uint32_t BUFFER_SIZE = 16;
 
 typedef void (*rust_callback)(void *data, int16_t *, size_t);
 
-struct CallbackData {
+
+struct Stream {
+    rtaudio_t audio;
     rust_callback inner;
     void *data;
 };
 
-struct Stream {
-    rtaudio_t audio;
-    CallbackData *data;
-};
-
 rtaudio_static_inline void rtaudio_check_stream_status(rtaudio_stream_status_t status) {
-//    switch (status) {
-//        case RTAUDIO_STATUS_INPUT_OVERFLOW:
-//            rtaudio_warn("input overflow!");
-//            break;
-//        case RTAUDIO_STATUS_OUTPUT_UNDERFLOW:
-//            rtaudio_warn("output underflow!");
-//            break;
-//        default:
-//            break;
-//    }
+    (void) status;
+#ifdef __DEBUG__
+    switch (status) {
+        case RTAUDIO_STATUS_INPUT_OVERFLOW:
+            rtaudio_warn("input overflow!");
+            break;
+        case RTAUDIO_STATUS_OUTPUT_UNDERFLOW:
+            rtaudio_warn("output underflow!");
+            break;
+        default:
+            break;
+    }
+#endif
 }
 
 int output_callback(void *out_buffer_, void *in_buffer, unsigned int size, double time,
                     rtaudio_stream_status_t status, void *userdata_) {
     (void) in_buffer;
     (void) time;
-    auto *userdata = reinterpret_cast<CallbackData *>(userdata_);
+    auto *userdata = reinterpret_cast<Stream *>(userdata_);
     auto *out_buffer = reinterpret_cast<int16_t *>(out_buffer_);
     rtaudio_check_stream_status(status);
 
@@ -73,7 +78,7 @@ int input_callback(void *out_buffer, void *in_buffer_, unsigned int size, double
                    rtaudio_stream_status_t status, void *userdata_) {
     (void) out_buffer;
     (void) time;
-    auto *userdata = reinterpret_cast<CallbackData *>(userdata_);
+    auto *userdata = reinterpret_cast<Stream *>(userdata_);
     auto *in_buffer = reinterpret_cast<int16_t *>(in_buffer_);
     rtaudio_check_stream_status(status);
 
@@ -85,7 +90,6 @@ int input_callback(void *out_buffer, void *in_buffer_, unsigned int size, double
 extern "C" {
 void print_device(rtaudio_device_info_t &device) {
     if (device.probed) {
-        // Print, for example, the maximum number of output channels for each device
         std::cout << "device: \"" << device.name << "\"";
         if (device.is_default_output) {
             std::cout << " <default output>";
@@ -143,15 +147,7 @@ rtaudio_static_inline rtaudio_t rtaudio_select_host() {
 #endif
 }
 
-rtaudio_static_inline int32_t rtaudio_select_default_input(rtaudio_t host) {
-    return rtaudio_get_default_input_device(host);
-}
-
-rtaudio_static_inline int32_t rtaudio_select_default_output(rtaudio_t host) {
-    return rtaudio_get_default_output_device(host);
-}
-
-void rtaudio_print_hosts() {
+rtaudio_unused void rtaudio_print_hosts() {
     rtaudio_t rtaudio = rtaudio_select_host();
     int32_t count = rtaudio_device_count(rtaudio);
 
@@ -161,69 +157,64 @@ void rtaudio_print_hosts() {
         rtaudio_device_info_t device_info = rtaudio_get_device_info(rtaudio, i);
         print_device(device_info);
     }
-}
-
-Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
-    rtaudio_t rtaudio = rtaudio_select_host();
-    uint32_t device = rtaudio_select_default_output(rtaudio);
-
-    rtaudio_stream_parameters_t config{device, CHANNEL_COUNT, 0};
-
-    uint32_t buffer_size = BUFFER_SIZE;
-
-    auto *callback_data = new CallbackData{callback, data};
-
-    if (rtaudio_open_stream(rtaudio, &config, nullptr, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
-                            output_callback, callback_data, nullptr, nullptr)) { goto error; }
-
-    if (rtaudio_start_stream(rtaudio)) {
-        rtaudio_close_stream(rtaudio);
-        goto error;
-    }
-
-    return new Stream{rtaudio, callback_data};
-
-    error:
-    std::cerr << rtaudio_error(rtaudio) << std::endl;
 
     rtaudio_destroy(rtaudio);
-
-    return nullptr;
-}
-
-Stream *rtaudio_create_input_stream(rust_callback callback, void *data) {
-    rtaudio_t rtaudio = rtaudio_select_host();
-    uint32_t device = rtaudio_select_default_input(rtaudio);
-
-    rtaudio_stream_parameters_t config{device, CHANNEL_COUNT, 0};
-
-    uint32_t buffer_size = BUFFER_SIZE;
-
-    auto *callback_data = new CallbackData{callback, data};
-
-    if (rtaudio_open_stream(rtaudio, nullptr, &config, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
-                            input_callback, callback_data, nullptr, nullptr)) { goto error; }
-
-    if (rtaudio_start_stream(rtaudio)) {
-        rtaudio_close_stream(rtaudio);
-        goto error;
-    }
-
-    return new Stream{rtaudio, callback_data};
-
-    error:
-    std::cerr << rtaudio_error(rtaudio) << std::endl;
-
-    rtaudio_destroy(rtaudio);
-
-    return nullptr;
 }
 
 void rtaudio_destroy_stream(Stream *stream) {
     rtaudio_stop_stream(stream->audio);
     rtaudio_close_stream(stream->audio);
     rtaudio_destroy(stream->audio);
-    delete stream->data;
     delete stream;
+}
+
+rtaudio_unused Stream *rtaudio_create_output_stream(rust_callback callback, void *data) {
+    rtaudio_t rtaudio = rtaudio_select_host();
+    uint32_t device = rtaudio_get_default_output_device(rtaudio);
+
+    rtaudio_stream_parameters_t config{device, CHANNEL_COUNT, 0};
+
+    uint32_t buffer_size = BUFFER_SIZE;
+
+    auto *stream = new Stream{rtaudio, callback, data};
+
+    if (rtaudio_open_stream(rtaudio, &config, nullptr, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
+                            output_callback, stream, nullptr, nullptr)) { goto error; }
+
+    if (rtaudio_start_stream(rtaudio)) { goto error; }
+
+    return stream;
+
+    error:
+    std::cerr << rtaudio_error(rtaudio) << std::endl;
+
+    rtaudio_destroy_stream(stream);
+
+    return nullptr;
+}
+
+rtaudio_unused Stream *rtaudio_create_input_stream(rust_callback callback, void *data) {
+    rtaudio_t rtaudio = rtaudio_select_host();
+    uint32_t device = rtaudio_get_default_input_device(rtaudio);
+
+    rtaudio_stream_parameters_t config{device, CHANNEL_COUNT, 0};
+
+    uint32_t buffer_size = BUFFER_SIZE;
+
+    auto *stream = new Stream{rtaudio, callback, data};
+
+    if (rtaudio_open_stream(rtaudio, nullptr, &config, SAMPLE_FORMAT, SAMPLE_RATE, &buffer_size,
+                            input_callback, stream, nullptr, nullptr)) { goto error; }
+
+    if (rtaudio_start_stream(rtaudio)) { goto error; }
+
+    return stream;
+
+    error:
+    std::cerr << rtaudio_error(rtaudio) << std::endl;
+
+    rtaudio_destroy_stream(stream);
+
+    return nullptr;
 }
 }
