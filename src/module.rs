@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use crate::mac::{MAC_FRAME_MAX, MacFrame, MacFrameRaw};
 
 
-const SYMBOL_LEN: usize = 4;
+const SYMBOL_LEN: usize = 5;
 const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
