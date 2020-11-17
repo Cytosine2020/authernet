@@ -7,22 +7,23 @@ use crate::{
 
 const SYMBOL_LEN: usize = 3;
 
-pub fn encode(buffer: MacFrame) -> impl Iterator<Item=bool> {
+
+fn encode(buffer: MacFrame) -> impl Iterator<Item=bool> {
     let size = buffer.get_total_size();
     let raw = buffer.into_raw();
 
     encode_nrzi(encode_4b_5b((0..size).map(move |index| raw[index])), false)
 }
 
-pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
-    [false, true, false].iter().cloned().chain(encode(buffer)).map(move |bit| {
-        [std::i16::MAX; SYMBOL_LEN].iter().cloned().map(move |item| if bit { item } else { -item })
+pub fn modulate(frame: MacFrame) -> impl Iterator<Item=i16> {
+    [false, true, false].iter().cloned().chain(encode(frame)).map(move |bit| {
+        std::iter::repeat(if bit { std::i16::MAX } else { -std::i16::MAX }).take(SYMBOL_LEN)
     }).flatten()
 }
 
 
 #[derive(Copy, Clone)]
-pub struct BitReceive {
+struct BitReceive {
     inner: MacFrameRaw,
     count: usize,
 }
@@ -63,10 +64,7 @@ impl Receiver for BitReceive {
 
 type Decoder = DecodeNRZI<Decode4B5B<BitReceive>>;
 
-pub fn decoder(init: bool) -> Decoder {
-    DecodeNRZI::new(Decode4B5B::new(BitReceive::new()), init)
-}
-
+fn decoder(init: bool) -> Decoder { DecodeNRZI::new(Decode4B5B::new(BitReceive::new()), init) }
 
 enum DemodulateState {
     Wait,
@@ -85,7 +83,6 @@ impl Demodulator {
     const MOVING_AVERAGE: i64 = 4;
     const ACTIVE_THRESHOLD: i64 = 1024;
     const JAMMING_THRESHOLD: i64 = 4096;
-    const VARIANCE_THRESHOLD: i16 = 512;
 
     fn moving_average(last: i64, new: i64) -> i64 {
         (last * (Self::MOVING_AVERAGE - 1) + new) / Self::MOVING_AVERAGE
@@ -136,7 +133,7 @@ impl Demodulator {
                         let avg = value.iter().map(|i| i.abs()).sum::<i16>() / 3;
                         let var = value.iter().map(|i| (i.abs() - avg).abs()).sum::<i16>() / 3;
 
-                        if var < Self::VARIANCE_THRESHOLD {
+                        if var * 4 < avg {
                             if value[0] < 0 && value[1] > 0 && value[2] < 0 {
                                 self.state = DemodulateState::Receive(1, avg, decoder(false));
                             } else if value[0] > 0 && value[1] < 0 && value[2] > 0 {
@@ -157,7 +154,7 @@ impl Demodulator {
                 *count += 1;
 
                 if *count % SYMBOL_LEN == 0 {
-                    if (item.abs() - *avg).abs() > Self::VARIANCE_THRESHOLD {
+                    if (item.abs() - *avg).abs() * 2 > *avg {
                         // println!("difference too big");
                         self.state = DemodulateState::Wait;
                         self.window.clear();

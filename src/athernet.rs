@@ -9,7 +9,7 @@ use crate::{
 };
 
 
-const ACK_TIMEOUT: usize = 1100;
+const ACK_TIMEOUT: usize = 1000;
 const BACK_OFF_WINDOW: usize = 500;
 const FRAME_INTERVAL: usize = 50;
 
@@ -43,6 +43,16 @@ impl Athernet {
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
 
         let sending = move |frame: MacFrame, count| {
+            // let tag = (frame.get_dest(), frame.get_tag());
+            //
+            // match frame.get_op() {
+            //     MacFrame::OP_ACK => println!("sending ACK {:?}", tag),
+            //     MacFrame::OP_DATA => println!("sending DATA {:?}", tag),
+            //     MacFrame::OP_PING_REQ => println!("sending PING REQ {:?}", tag),
+            //     MacFrame::OP_PING_REPLY => println!("sending RING REPLY {:?}", tag),
+            //     _ => {}
+            // }
+
             SendState::Sending(frame, modulate(frame), count)
         };
 
@@ -164,17 +174,21 @@ impl Athernet {
                         match frame.get_op() {
                             MacFrame::OP_ACK => {
                                 ack_recv_sender.send(tag).unwrap();
+                                // println!("receiving ACK {:?}", tag);
                             }
                             MacFrame::OP_DATA => {
                                 ack_send_sender.send(tag).unwrap();
                                 sender.send(frame).unwrap();
+                                // println!("receiving DATA {:?}", tag);
                             }
                             MacFrame::OP_PING_REQ => {
                                 ping_sender.send(tag).unwrap();
+                                // println!("receiving PING REQ {:?}", tag);
                             }
                             MacFrame::OP_PING_REPLY => {
                                 ack_recv_sender.send(tag).unwrap();
                                 ping_send.send(tag).unwrap();
+                                // println!("receiving PING REPLY {:?}", tag);
                             }
                             _ => {}
                         }
