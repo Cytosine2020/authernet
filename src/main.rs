@@ -1,6 +1,7 @@
 pub mod rtaudio;
 pub mod athernet;
 pub mod module;
+pub mod coding;
 pub mod mac;
 
 #[macro_use]
@@ -8,13 +9,15 @@ extern crate lazy_static;
 
 
 use std::{env, fs::File, io::{Read, BufReader, Write}};
-use crate::mac::{DATA_PACK_MAX, DataPack, MacLayer};
+use crate::mac::{DATA_PACK_MAX, DataPack, MacLayer, MacFrame};
+use crate::module::{encode, decoder};
+use crate::coding::Receiver;
 
 fn data_pack_unwrap(data_pack: &DataPack) -> &[u8] {
     &data_pack[1..][..data_pack[0] as usize]
 }
 
-pub struct FileRead<T> {
+struct FileRead<T> {
     iter: T,
 }
 
@@ -54,6 +57,16 @@ enum Command {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut data = [0u8; DATA_PACK_MAX];
+    data[0] = (DATA_PACK_MAX - 1) as u8;
+    let frame = MacFrame::wrap(4, 5, 6, &data);
+    let mut receiver = decoder(false);
+    for item in encode(frame) {
+        if let Some(result) = receiver.push(item) {
+            println!("{:?}", result.map(|item| MacFrame::from_raw(item)));
+        }
+    }
+
     let mut args = env::args();
 
     args.next();

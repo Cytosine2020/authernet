@@ -1,103 +1,45 @@
 use std::collections::VecDeque;
-use crate::mac::{MAC_FRAME_MAX, MacFrame, MacFrameRaw};
+use crate::{
+    mac::{MAC_FRAME_MAX, MacFrame, MacFrameRaw},
+    coding::{Receiver, Return, DecodeNRZI, Decode4B5B, encode_4b_5b, encode_nrzi},
+};
 
 
-const SYMBOL_LEN: usize = 5;
-const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
+const SYMBOL_LEN: usize = 3;
 
-
-lazy_static!(
-    static ref CARRIER: [i16; SYMBOL_LEN] = {
-        let mut carrier = [0i16; SYMBOL_LEN];
-
-        const ZERO: f32 = SYMBOL_LEN as f32 / 2. - 0.5;
-
-        for i in 0..SYMBOL_LEN {
-            let t = (i as f32 - ZERO) * std::f32::consts::PI * 2. / SYMBOL_LEN as f32;
-
-            let sinc = if t.abs() < 1e-6 { 1. } else { t.sin() / t };
-
-            carrier[i] = (sinc * std::i16::MAX as f32) as i16;
-        }
-
-        carrier
-    };
-);
-
-fn carrier() -> impl Iterator<Item=i16> + 'static { CARRIER.iter().cloned() }
-
-
-pub struct ByteToBitIter<T> {
-    iter: T,
-    buffer: u8,
-    index: u8,
-}
-
-impl<T> From<T> for ByteToBitIter<T> {
-    fn from(iter: T) -> Self { Self { iter, buffer: 0, index: 8 } }
-}
-
-impl<T: Iterator<Item=u8>> Iterator for ByteToBitIter<T> {
-    type Item = bool;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index == 8 {
-            if let Some(byte) = self.iter.next() {
-                self.index = 0;
-                self.buffer = byte;
-            } else {
-                return None;
-            }
-        };
-
-        let index = self.index;
-        self.index += 1;
-        Some(((self.buffer >> index) & 1) == 1)
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let (min, max) = self.iter.size_hint();
-        let extra = 8 - self.index as usize;
-        (min * 8 + extra, max.map(|value| value * 8 + extra))
-    }
-}
-
-
-fn pulse_shaping<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
-    iter.map(move |bit| {
-        carrier().map(move |item| if bit { item } else { -item })
-    }).flatten()
-}
-
-pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
+pub fn encode(buffer: MacFrame) -> impl Iterator<Item=bool> {
     let size = buffer.get_total_size();
     let raw = buffer.into_raw();
 
-    pulse_shaping(BARKER.iter().cloned().chain(ByteToBitIter::from(
-        (0..size).map(move |index| raw[index])
-    )))
+    encode_nrzi(encode_4b_5b((0..size).map(move |index| raw[index])), false)
+}
+
+pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
+    [false, true, false].iter().cloned().chain(encode(buffer)).map(move |bit| {
+        [std::i16::MAX; SYMBOL_LEN].iter().cloned().map(move |item| if bit { item } else { -item })
+    }).flatten()
 }
 
 
 #[derive(Copy, Clone)]
-struct BitReceive {
+pub struct BitReceive {
     inner: MacFrameRaw,
     count: usize,
-    mac_addr: u8,
 }
 
 impl BitReceive {
-    #[inline]
-    pub fn new(mac_addr: u8) -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0, mac_addr } }
+    pub fn new() -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0 } }
+}
 
-    #[inline]
-    pub fn push(&mut self, bit: bool) -> Option<Option<MacFrame>> {
-        self.inner[self.count / 8] |= (bit as u8) << (self.count % 8);
+impl Receiver for BitReceive {
+    type Item = u8;
+    type Collection = MacFrameRaw;
+
+    fn push(&mut self, item: Self::Item) -> Return<Self::Collection> {
+        self.inner[self.count] = item;
         self.count += 1;
 
-        if self.count <= (MacFrame::MAC_DATA_SIZE + 1) * 8 {
+        if self.count < MacFrame::MAC_DATA_SIZE + 1 {
             None
         } else {
             let size = if (self.inner[MacFrame::OP_INDEX] & 0b1111) == MacFrame::OP_DATA {
@@ -106,56 +48,44 @@ impl BitReceive {
                 1
             } + MacFrame::MAC_DATA_SIZE;
 
-            if size > MAC_FRAME_MAX { return Some(None); }
+            if size > MAC_FRAME_MAX { return Some(Err("mac frame size too big!".into())); }
 
-            if self.count < size * 8 {
+            if self.count < size {
                 None
             } else {
-                Some(Some(MacFrame::from_raw(self.inner)))
+                Some(Ok(self.inner))
             }
         }
     }
 
-    #[inline]
-    pub fn is_self(&self) -> bool {
-        self.count < 4 || (self.inner[MacFrame::MAC_INDEX] & 0b1111) == self.mac_addr
-    }
+    fn peak(&self) -> (usize, &Self::Collection) { (self.count, &self.inner) }
 }
 
+type Decoder = DecodeNRZI<Decode4B5B<BitReceive>>;
+
+pub fn decoder(init: bool) -> Decoder {
+    DecodeNRZI::new(Decode4B5B::new(BitReceive::new()), init)
+}
+
+
 enum DemodulateState {
-    WAITE,
-    RECEIVE(usize, BitReceive),
+    Wait,
+    Receive(usize, i16, Decoder),
 }
 
 pub struct Demodulator {
     window: VecDeque<i16>,
     state: DemodulateState,
-    last_prod: i64,
     moving_average: i64,
     mac_addr: u8,
 }
 
 impl Demodulator {
-    const PREAMBLE_LEN: usize = SYMBOL_LEN * BARKER.len();
-    const HEADER_THRESHOLD_SCALE: i64 = 1 << 19;
-    const MOVING_AVERAGE: i64 = 16;
-    const ACTIVE_THRESHOLD: i64 = 512;
+    const PREAMBLE_LEN: usize = SYMBOL_LEN * 3;
+    const MOVING_AVERAGE: i64 = 4;
+    const ACTIVE_THRESHOLD: i64 = 1024;
     const JAMMING_THRESHOLD: i64 = 4096;
-
-    fn dot_product<I: Iterator<Item=i16>, U: Iterator<Item=i16>>(iter_a: I, iter_b: U) -> i64 {
-        iter_a.zip(iter_b).map(|(a, b)| a as i64 * b as i64).sum::<i64>()
-    }
-
-    fn preamble_product(&self) -> i64 {
-        Self::dot_product(
-            self.window.iter().skip(self.window.len() - Self::PREAMBLE_LEN).cloned(),
-            pulse_shaping(BARKER.iter().cloned()),
-        )
-    }
-
-    fn section_product(&self, offset: usize) -> i64 {
-        Self::dot_product(self.window.iter().skip(offset).cloned(), carrier())
-    }
+    const VARIANCE_THRESHOLD: i16 = 512;
 
     fn moving_average(last: i64, new: i64) -> i64 {
         (last * (Self::MOVING_AVERAGE - 1) + new) / Self::MOVING_AVERAGE
@@ -164,8 +94,7 @@ impl Demodulator {
     pub fn new(mac_addr: u8) -> Self {
         Self {
             window: VecDeque::with_capacity(Self::PREAMBLE_LEN),
-            state: DemodulateState::WAITE,
-            last_prod: 0,
+            state: DemodulateState::Wait,
             moving_average: 0,
             mac_addr,
         }
@@ -174,8 +103,9 @@ impl Demodulator {
     pub fn is_active(&self) -> bool {
         if self.moving_average > Self::JAMMING_THRESHOLD { return true; }
 
-        if let DemodulateState::RECEIVE(_, receiver) = self.state {
-            !receiver.is_self()
+        if let DemodulateState::Receive(_, _, receiver) = self.state {
+            let (count, data) = receiver.peak();
+            count == 0 || data[0] & 0b1111 == self.mac_addr
         } else {
             false
         }
@@ -186,54 +116,62 @@ impl Demodulator {
         self.window.push_back(item);
 
         self.moving_average = Self::moving_average(self.moving_average, (item as i64).abs());
-        let threshold = self.moving_average * Self::HEADER_THRESHOLD_SCALE;
-        let mut prod = 0;
 
-        match self.state {
-            DemodulateState::WAITE => {
-                if self.window.len() >= Self::PREAMBLE_LEN &&
+        match &mut self.state {
+            DemodulateState::Wait => {
+                if self.window.len() == Self::PREAMBLE_LEN &&
                     self.moving_average > Self::ACTIVE_THRESHOLD {
-                    prod = self.preamble_product();
+                    const INDEX: [usize; 3] = [1, 4, 7];
 
-                    if prod > threshold && self.last_prod > prod && BARKER.len() <= BARKER.iter()
-                        .enumerate().map(|(index, bit)| {
-                        let shift = self.window.len() - Self::PREAMBLE_LEN;
+                    if INDEX.iter().cloned().all(|i| {
+                        let item = self.window[i].abs();
+                        item > self.window[i - 1].abs() && item > self.window[i + 1].abs()
+                    }) {
+                        let value = [
+                            self.window[INDEX[0]],
+                            self.window[INDEX[1]],
+                            self.window[INDEX[2]],
+                        ];
 
-                        let prod = self.section_product(shift + index * SYMBOL_LEN);
+                        let avg = value.iter().map(|i| i.abs()).sum::<i16>() / 3;
+                        let var = value.iter().map(|i| (i.abs() - avg).abs()).sum::<i16>() / 3;
 
-                        if *bit == (prod > 0) { 1 } else { 0 }
-                    }).sum::<usize>() {
-                        self.state = DemodulateState::RECEIVE(0, BitReceive::new(self.mac_addr));
-                        prod = 0;
+                        if var < Self::VARIANCE_THRESHOLD {
+                            if value[0] < 0 && value[1] > 0 && value[2] < 0 {
+                                self.state = DemodulateState::Receive(1, avg, decoder(false));
+                            } else if value[0] > 0 && value[1] < 0 && value[2] > 0 {
+                                self.state = DemodulateState::Receive(1, avg, decoder(true));
+                            }
+                        }
                     }
                 }
             }
-            DemodulateState::RECEIVE(mut count, mut buffer) => {
+            DemodulateState::Receive(count, avg, buffer) => {
                 if self.moving_average > Self::JAMMING_THRESHOLD {
-                    self.state = DemodulateState::WAITE;
+                    // println!("jammed");
+                    self.state = DemodulateState::Wait;
                     self.window.clear();
                     return None;
                 }
 
-                count += 1;
+                *count += 1;
 
-                self.state = if count == SYMBOL_LEN {
-                    let prod = self.section_product(self.window.len() - SYMBOL_LEN);
-
-                    if let Some(result) = buffer.push(prod > 0) {
-                        self.state = DemodulateState::WAITE;
+                if *count % SYMBOL_LEN == 0 {
+                    if (item.abs() - *avg).abs() > Self::VARIANCE_THRESHOLD {
+                        // println!("difference too big");
+                        self.state = DemodulateState::Wait;
                         self.window.clear();
-                        return result;
+                        return None;
                     }
 
-                    DemodulateState::RECEIVE(0, buffer)
-                } else {
-                    DemodulateState::RECEIVE(count, buffer)
-                }
+                    if let Some(result) = buffer.push(item > 0) {
+                        self.state = DemodulateState::Wait;
+                        self.window.clear();
+                        return result.map(|frame| MacFrame::from_raw(frame)).ok();
+                    }
+                };
             }
         }
-
-        self.last_prod = prod;
 
         None
     }

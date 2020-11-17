@@ -1,5 +1,7 @@
-use crate::athernet::Athernet;
+use std::fmt::Formatter;
 use crc16;
+use crate::athernet::Athernet;
+
 
 
 pub const DATA_PACK_MAX: usize = 54;
@@ -105,13 +107,13 @@ impl MacFrame {
     }
 
     #[inline]
-    pub fn wrap(src: u8, dest: u8, op: u8, tag: u8, data: &DataPack) -> Self {
+    pub fn wrap(src: u8, dest: u8, tag: u8, data: &DataPack) -> Self {
         let mut result = Self::new();
 
         result
             .set_src(src)
             .set_dest(dest)
-            .set_op(op)
+            .set_op(Self::OP_DATA)
             .set_tag(tag)
             .set_pay_load(data)
             .generate_crc();
@@ -243,6 +245,21 @@ impl MacFrame {
     }
 }
 
+impl std::fmt::Debug for MacFrame {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let data = self.unwrap();
+
+        f
+            .debug_struct("MacFrame")
+            .field("src", &self.get_src())
+            .field("dest", &self.get_dest())
+            .field("op", &self.get_op())
+            .field("tag", &self.get_tag())
+            .field("data", &&data[1..][..data[0] as usize])
+            .finish()
+    }
+}
+
 pub struct MacLayer {
     athernet: Athernet,
     send_tag: [u8; 255],
@@ -273,9 +290,7 @@ impl MacLayer {
             tag
         };
 
-        Ok(self.athernet.send(
-            MacFrame::wrap(self.mac_addr, self.dest, MacFrame::OP_DATA, tag, data)
-        )?)
+        Ok(self.athernet.send(MacFrame::wrap(self.mac_addr, self.dest, tag, data))?)
     }
 
     pub fn recv(&mut self) -> Result<DataPack, Box<dyn std::error::Error>> {
