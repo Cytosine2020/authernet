@@ -147,10 +147,7 @@ impl Demodulator {
     }
 
     fn preamble_product(&self) -> i64 {
-        Self::dot_product(
-            self.window.iter().skip(self.window.len() - Self::PREAMBLE_LEN).cloned(),
-            pulse_shaping(BARKER.iter().cloned()),
-        )
+        Self::dot_product(self.window.iter().cloned(), pulse_shaping(BARKER.iter().cloned()))
     }
 
     fn section_product(&self, offset: usize) -> i64 {
@@ -191,18 +188,14 @@ impl Demodulator {
 
         match self.state {
             DemodulateState::WAITE => {
-                if self.window.len() >= Self::PREAMBLE_LEN &&
+                if self.window.len() == Self::PREAMBLE_LEN &&
                     self.moving_average > Self::ACTIVE_THRESHOLD {
                     prod = self.preamble_product();
 
-                    if prod > threshold && self.last_prod > prod && BARKER.len() <= BARKER.iter()
-                        .enumerate().map(|(index, bit)| {
-                        let shift = self.window.len() - Self::PREAMBLE_LEN;
-
-                        let prod = self.section_product(shift + index * SYMBOL_LEN);
-
-                        if *bit == (prod > 0) { 1 } else { 0 }
-                    }).sum::<usize>() {
+                    if prod > threshold && self.last_prod > prod && BARKER.iter()
+                        .enumerate().all(|(index, bit)| {
+                        *bit == (self.section_product(index * SYMBOL_LEN) > 0)
+                    }) {
                         self.state = DemodulateState::RECEIVE(0, BitReceive::new(self.mac_addr));
                         prod = 0;
                     }
@@ -218,7 +211,7 @@ impl Demodulator {
                 count += 1;
 
                 self.state = if count == SYMBOL_LEN {
-                    let prod = self.section_product(self.window.len() - SYMBOL_LEN);
+                    let prod = self.section_product(Self::PREAMBLE_LEN - SYMBOL_LEN);
 
                     if let Some(result) = buffer.push(prod > 0) {
                         self.state = DemodulateState::WAITE;
