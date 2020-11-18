@@ -152,12 +152,10 @@ impl<I: Iterator<Item=bool>> Iterator for EncodeNRZI<I> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(item) = self.iter.next() {
+        self.iter.next().map(|item| {
             self.last ^= item;
-            Some(self.last)
-        } else {
-            None
-        }
+            self.last
+        })
     }
 
     #[inline]
@@ -243,11 +241,7 @@ impl<R: Receiver<Item=u8>> Receiver for Decode4B5B<R> {
 
         if self.index == 10 {
             match self.decode_byte() {
-                Ok(byte) => {
-                    self.receiver.push(byte).map(|result| {
-                        result.map_err(|err| err.into())
-                    })
-                }
+                Ok(byte) => self.receiver.push(byte),
                 Err(error) => Some(Err(error)),
             }
         } else {

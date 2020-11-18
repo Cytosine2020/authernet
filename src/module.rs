@@ -6,6 +6,67 @@ use crate::{
 
 
 const SYMBOL_LEN: usize = 3;
+const EXPANSION: usize = 5;
+const PULSE_LEN: usize = SYMBOL_LEN * EXPANSION;
+
+
+lazy_static!(
+    pub static ref PULSE: [i16; PULSE_LEN] = {
+        let mut carrier = [0i16; PULSE_LEN];
+
+        const ZERO: f32 = PULSE_LEN as f32 / 2. - 0.5;
+
+        for i in SYMBOL_LEN / 2..PULSE_LEN - SYMBOL_LEN / 2 {
+            let t = (i as f32 - ZERO) * std::f32::consts::PI / SYMBOL_LEN as f32;
+
+            let sinc = if t.abs() < 1e-6 { 1. } else { t.sin() / t };
+
+            carrier[i] = (sinc * std::i16::MAX as f32 * 0.5) as i16;
+        }
+
+        carrier
+    };
+);
+
+
+struct SlidingWindow<I: Iterator> {
+    iter: I,
+    buffer: VecDeque<Option<I::Item>>,
+}
+
+impl<I> SlidingWindow<I>
+    where I: Iterator, I::Item: Clone,
+{
+    pub fn new(iter: I, size: usize) -> Self {
+        Self { iter, buffer: std::iter::repeat(None).take(size).collect() }
+    }
+}
+
+impl<I> Iterator for SlidingWindow<I>
+    where I: Iterator, I::Item: Clone,
+{
+    type Item = Box<[Option<I::Item>]>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = if let Some(item) = self.iter.next() {
+            Some(item)
+        } else {
+            if let None = self.buffer[0] { return None; }
+            None
+        };
+
+        self.buffer.pop_front();
+        self.buffer.push_back(item);
+
+        Some(self.buffer.iter().cloned().collect())
+    }
+}
+
+fn sliding_window<I>(iter: I, size: usize) -> SlidingWindow<I>
+    where I: Iterator, I::Item: Clone,
+{
+    SlidingWindow::new(iter, size)
+}
 
 
 fn encode(buffer: MacFrame) -> impl Iterator<Item=bool> {
@@ -16,9 +77,15 @@ fn encode(buffer: MacFrame) -> impl Iterator<Item=bool> {
 }
 
 pub fn modulate(frame: MacFrame) -> impl Iterator<Item=i16> {
-    [false, true, false].iter().cloned().chain(encode(frame)).map(move |bit| {
-        std::iter::repeat(if bit { std::i16::MAX } else { -std::i16::MAX }).take(SYMBOL_LEN)
-    }).flatten()
+    sliding_window([false, true, false].iter().cloned().chain(encode(frame)), EXPANSION)
+        .map(move |window| {
+            (0..SYMBOL_LEN).map(move |i|
+                (0..EXPANSION).map(|j| PULSE[(EXPANSION - j - 1) * SYMBOL_LEN + i])
+                    .zip(window.iter()).map(|(value, bit)| {
+                    value * bit.map(|item| if item { 1 } else { -1 }).unwrap_or(0)
+                }).sum::<i16>()
+            )
+        }).flatten()
 }
 
 
@@ -169,6 +236,8 @@ impl Demodulator {
                 };
             }
         }
+
+        // eprintln!("{}", item);
 
         None
     }
