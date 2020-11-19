@@ -54,48 +54,42 @@ enum Command {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    rtaudio::print_hosts();
-
     let mut args = env::args();
 
     args.next();
 
-    let src = args.next().unwrap().parse::<u8>()?;
-    let dest = args.next().unwrap().parse::<u8>()?;
+    let src = args.next().unwrap().parse::<u8>()? & 0b1111;
+    let dest = args.next().unwrap().parse::<u8>()? & 0b1111;
     let mut commands = Vec::new();
     let mut perf = false;
     let mut wait = 0;
 
-    loop {
-        if let Some(command_) = args.next() {
-            let command = command_.as_bytes();
+    while let Some(command_) = args.next() {
+        let command = command_.as_bytes();
 
-            if command[0] as char != '-' || command.len() != 2 {
-                return Err(String::from(
-                    format!("unknown command: {:?}", command_).to_owned()
-                ).into());
-            }
+        if command[0] as char != '-' || command.len() != 2 {
+            return Err(String::from(
+                format!("unknown command: {:?}", command_).to_owned()
+            ).into());
+        }
 
-            match command[1] as char {
-                'p' => commands.push(Command::Ping),
-                'e' => perf = true,
-                _ => {
-                    if let Some(arg) = args.next() {
-                        match command[1] as char {
-                            's' => commands.push(Command::Send(arg)),
-                            'r' => commands.push(Command::Recv(arg)),
-                            'w' => wait = arg.parse::<u64>()?,
-                            _ => return Err(String::from(
-                                format!("unknown command: {:?}", command_).to_owned()
-                            ).into()),
-                        }
-                    } else {
-                        Err(format!("command {:?} need parameter!", command))?;
+        match command[1] as char {
+            'p' => commands.push(Command::Ping),
+            'e' => perf = true,
+            _ => {
+                if let Some(arg) = args.next() {
+                    match command[1] as char {
+                        's' => commands.push(Command::Send(arg)),
+                        'r' => commands.push(Command::Recv(arg)),
+                        'w' => wait = arg.parse::<u64>()?,
+                        _ => return Err(String::from(
+                            format!("unknown command: {:?}", command_).to_owned()
+                        ).into()),
                     }
+                } else {
+                    Err(format!("command {:?} need parameter!", command))?;
                 }
             }
-        } else {
-            break;
         }
     }
 
@@ -153,7 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Command::Ping => {
                 for tag in 0..=255u8 {
-                    println!("ping {}: {:?}", tag, athernet.ping(tag)?);
+                    println!("ping {}: {:?}", tag, athernet.ping()?);
                 }
             }
         }

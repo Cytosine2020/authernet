@@ -1,14 +1,13 @@
-use lazy_static;
 use crate::athernet::Athernet;
+use crc16;
 
 
-pub const DATA_PACK_MAX: usize = 128;
-pub const CRC_SIZE: usize = 1;
+pub const DATA_PACK_MAX: usize = 54;
+pub const CRC_SIZE: usize = 2;
 pub const MAC_FRAME_MAX: usize = MacFrame::MAC_DATA_SIZE + DATA_PACK_MAX + CRC_SIZE;
 
 pub type DataPack = [u8; DATA_PACK_MAX];
 pub type MacFrameRaw = [u8; MAC_FRAME_MAX];
-
 
 lazy_static!(
     static ref CRC_TABLE: [u8; 256] = {
@@ -24,8 +23,14 @@ lazy_static!(
     };
 );
 
-fn crc_calculate<I: Iterator<Item=u8>>(iter: I) -> u8 {
+fn crc8_calculate<I: Iterator<Item=u8>>(iter: I) -> u8 {
     iter.fold(0, |crc, byte| CRC_TABLE[(crc ^ byte) as usize])
+}
+
+fn crc16_calculate<I: Iterator<Item=u8>>(iter: I) -> u16 {
+    let buffer = iter.collect::<Vec<_>>();
+
+    crc16::State::<crc16::ARC>::calculate(buffer.as_slice())
 }
 
 #[derive(Copy, Clone)]
@@ -34,13 +39,11 @@ pub struct MacFrame {
 }
 
 impl MacFrame {
-    pub const SRC_INDEX: usize = 0;
-    pub const DEST_INDEX: usize = Self::SRC_INDEX + 1;
-    pub const OP_INDEX: usize = Self::DEST_INDEX + 1;
-    pub const TAG_INDEX: usize = Self::OP_INDEX + 1;
-    pub const MAC_DATA_SIZE: usize = Self::TAG_INDEX + 1;
+    pub const MAC_INDEX: usize = 0;
+    pub const OP_INDEX: usize = Self::MAC_INDEX + 1;
+    pub const MAC_DATA_SIZE: usize = Self::OP_INDEX + 1;
 
-    pub const BROADCAST_MAC: u8 = 0b11111111;
+    pub const BROADCAST_MAC: u8 = 0b1111;
 
     pub const OP_DATA: u8 = 0b0000;
     pub const OP_PING_REQ: u8 = 0b0001;
@@ -52,25 +55,29 @@ impl MacFrame {
 
     #[inline]
     fn set_src(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::SRC_INDEX] = val;
+        self.inner[Self::MAC_INDEX] &= 0b11110000;
+        self.inner[Self::MAC_INDEX] |= (val & 0b1111) << 0;
         self
     }
 
     #[inline]
     fn set_dest(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::DEST_INDEX] = val;
+        self.inner[Self::MAC_INDEX] &= 0b00001111;
+        self.inner[Self::MAC_INDEX] |= (val & 0b1111) << 4;
         self
     }
 
     #[inline]
     fn set_op(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::OP_INDEX] = val;
+        self.inner[Self::OP_INDEX] &= 0b11110000;
+        self.inner[Self::OP_INDEX] |= (val & 0b1111) << 0;
         self
     }
 
     #[inline]
     fn set_tag(&mut self, val: u8) -> &mut Self {
-        self.inner[Self::TAG_INDEX] = val;
+        self.inner[Self::OP_INDEX] &= 0b00001111;
+        self.inner[Self::OP_INDEX] |= (val & 0b1111) << 4;
         self
     }
 
@@ -84,8 +91,17 @@ impl MacFrame {
     #[inline]
     fn generate_crc(&mut self) -> &mut Self {
         let size = self.get_size();
-        self.inner[size] = crc_calculate(self.inner[..size].iter().cloned());
-        self
+
+        if self.is_data() {
+            let crc = crc16_calculate(self.inner[..size].iter().cloned());
+            self.inner[size + 0] = ((crc >> 0) & 0b11111111) as u8;
+            self.inner[size + 1] = ((crc >> 8) & 0b11111111) as u8;
+            self
+        } else {
+            let size = self.get_size();
+            self.inner[size] = crc8_calculate(self.inner[..size].iter().cloned());
+            self
+        }
     }
 
     #[inline]
@@ -161,6 +177,20 @@ impl MacFrame {
     }
 
     #[inline]
+    pub fn get_crc_size(&self) -> usize {
+        if self.is_data() {
+            2
+        } else {
+            1
+        }
+    }
+
+    #[inline]
+    pub fn get_total_size(&self) -> usize {
+        self.get_size() + self.get_crc_size()
+    }
+
+    #[inline]
     pub fn get_payload_size(&self) -> usize {
         if self.is_data() {
             self.inner[Self::MAC_DATA_SIZE] as usize
@@ -170,16 +200,16 @@ impl MacFrame {
     }
 
     #[inline]
-    pub fn get_src(&self) -> u8 { self.inner[Self::SRC_INDEX] }
+    pub fn get_src(&self) -> u8 { (self.inner[Self::MAC_INDEX] >> 0) & 0b1111 }
 
     #[inline]
-    pub fn get_dest(&self) -> u8 { self.inner[Self::DEST_INDEX] }
+    pub fn get_dest(&self) -> u8 { (self.inner[Self::MAC_INDEX] >> 4) & 0b1111 }
 
     #[inline]
-    pub fn get_op(&self) -> u8 { self.inner[Self::OP_INDEX] }
+    pub fn get_op(&self) -> u8 { (self.inner[Self::OP_INDEX] >> 0) & 0b1111 }
 
     #[inline]
-    pub fn get_tag(&self) -> u8 { self.inner[Self::TAG_INDEX] }
+    pub fn get_tag(&self) -> u8 { (self.inner[Self::OP_INDEX] >> 4) & 0b1111 }
 
     #[inline]
     pub fn to_broadcast(&self) -> bool { self.get_dest() == MacFrame::BROADCAST_MAC }
@@ -191,9 +221,17 @@ impl MacFrame {
     pub fn is_data(&self) -> bool { self.get_op() == MacFrame::OP_DATA }
 
     #[inline]
+    pub fn is_ping_request(&self) -> bool { self.get_op() == MacFrame::OP_PING_REQ }
+
+    #[inline]
     pub fn check(&self, mac_addr: u8) -> bool {
-        crc_calculate(self.inner[..self.get_size() + CRC_SIZE].iter().cloned()) == 0 &&
-            (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
+        let crc_flag = if self.is_data() {
+            crc16_calculate(self.inner[..self.get_total_size()].iter().cloned()) == 0
+        } else {
+            crc8_calculate(self.inner[..self.get_total_size()].iter().cloned()) == 0
+        };
+
+        crc_flag && (self.get_dest() == mac_addr || self.get_dest() == MacFrame::BROADCAST_MAC)
     }
 
     #[inline]
@@ -247,34 +285,34 @@ impl MacLayer {
             let tag = mac_data.get_tag();
             let recv_tag = &mut self.recv_tag[src as usize];
 
-            if (src, tag) == (self.dest, *recv_tag) {
+            if (src, tag) == (self.dest, *recv_tag & 0b1111) {
                 *recv_tag = recv_tag.wrapping_add(1);
                 return Ok(mac_data.unwrap());
             }
         }
     }
 
-    pub fn ping(&mut self, tag: u8)
+    pub fn ping(&mut self)
                 -> Result<Option<std::time::Duration>, Box<dyn std::error::Error>> {
+        let send_tag = &mut self.send_tag[self.dest as usize];
+
         let time_out = std::time::Duration::from_secs(2);
 
         let start = std::time::SystemTime::now();
 
-        self.athernet.send(MacFrame::new_ping_request(self.mac_addr, self.dest, tag))?;
+        self.athernet.send(MacFrame::new_ping_request(self.mac_addr, self.dest, *send_tag))?;
 
-        let time = match self.athernet.ping_recv_timeout(time_out) {
-            Ok(pair) => {
-                if pair == (self.dest, tag) {
-                    Some(start.elapsed()?)
-                } else {
-                    Err("unexpected reply!")?;
-                    None
+        loop {
+            match self.athernet.ping_recv_timeout(time_out - start.elapsed()?) {
+                Ok(pair) => {
+                    if pair == (self.dest, *send_tag & 0b1111) {
+                        *send_tag = send_tag.wrapping_add(1);
+                        return Ok(Some(start.elapsed()?));
+                    }
                 }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(),
-        };
-
-        Ok(time)
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(),
+            };
+        }
     }
 }

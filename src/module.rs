@@ -1,9 +1,8 @@
 use std::collections::VecDeque;
-use lazy_static;
-use crate::mac::{MAC_FRAME_MAX, CRC_SIZE, MacFrame, MacFrameRaw};
+use crate::mac::{MAC_FRAME_MAX, MacFrame, MacFrameRaw};
 
 
-const SYMBOL_LEN: usize = 5;
+const SYMBOL_LEN: usize = 4;
 const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
 
@@ -73,7 +72,7 @@ fn pulse_shaping<I: Iterator<Item=bool>>(iter: I) -> impl Iterator<Item=i16> {
 }
 
 pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
-    let size = buffer.get_size() + CRC_SIZE;
+    let size = buffer.get_total_size();
     let raw = buffer.into_raw();
 
     pulse_shaping(BARKER.iter().cloned().chain(ByteToBitIter::from(
@@ -101,11 +100,11 @@ impl BitReceive {
         if self.count <= (MacFrame::MAC_DATA_SIZE + 1) * 8 {
             None
         } else {
-            let size = if self.inner[MacFrame::OP_INDEX] == MacFrame::OP_DATA {
-                self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1
+            let size = if (self.inner[MacFrame::OP_INDEX] & 0b1111) == MacFrame::OP_DATA {
+                self.inner[MacFrame::MAC_DATA_SIZE] as usize + 1 + 2
             } else {
-                0
-            } + MacFrame::MAC_DATA_SIZE + CRC_SIZE;
+                1
+            } + MacFrame::MAC_DATA_SIZE;
 
             if size > MAC_FRAME_MAX { return Some(None); }
 
@@ -119,7 +118,7 @@ impl BitReceive {
 
     #[inline]
     pub fn is_self(&self) -> bool {
-        self.count > 8 && self.inner[MacFrame::SRC_INDEX] == self.mac_addr
+        self.count < 4 || (self.inner[MacFrame::MAC_INDEX] & 0b1111) == self.mac_addr
     }
 }
 
@@ -140,8 +139,8 @@ impl Demodulator {
     const PREAMBLE_LEN: usize = SYMBOL_LEN * BARKER.len();
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 19;
     const MOVING_AVERAGE: i64 = 16;
-    const ACTIVE_THRESHOLD: i64 = 1024;
-    const JAMMING_THRESHOLD: i64 = 8192;
+    const ACTIVE_THRESHOLD: i64 = 512;
+    const JAMMING_THRESHOLD: i64 = 4096;
 
     fn dot_product<I: Iterator<Item=i16>, U: Iterator<Item=i16>>(iter_a: I, iter_b: U) -> i64 {
         iter_a.zip(iter_b).map(|(a, b)| a as i64 * b as i64).sum::<i64>()
@@ -173,7 +172,7 @@ impl Demodulator {
     }
 
     pub fn is_active(&self) -> bool {
-        if self.last_prod > Self::JAMMING_THRESHOLD { return false; }
+        if self.moving_average > Self::JAMMING_THRESHOLD { return true; }
 
         if let DemodulateState::RECEIVE(_, receiver) = self.state {
             !receiver.is_self()
@@ -210,6 +209,12 @@ impl Demodulator {
                 }
             }
             DemodulateState::RECEIVE(mut count, mut buffer) => {
+                if self.moving_average > Self::JAMMING_THRESHOLD {
+                    self.state = DemodulateState::WAITE;
+                    self.window.clear();
+                    return None;
+                }
+
                 count += 1;
 
                 self.state = if count == SYMBOL_LEN {
