@@ -1,7 +1,7 @@
-pub mod rtaudio;
-pub mod athernet;
-pub mod module;
-pub mod mac;
+mod rtaudio;
+mod athernet;
+mod module;
+mod mac;
 
 #[macro_use]
 extern crate lazy_static;
@@ -108,17 +108,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 buffer[0] = 8;
                 buffer[1..9].copy_from_slice(&size.to_le_bytes());
 
-                athernet.send(&buffer)?;
+                athernet.send(&buffer);
 
                 let iter = BufReader::new(file)
                     .bytes().filter_map(|item| item.ok());
 
                 for data_pack in FileRead::new(iter) {
-                    athernet.send(&data_pack)?;
+                    athernet.send(&data_pack);
                 }
             }
             Command::Recv(name) => {
-                let first_pack = athernet.recv()?;
+                let first_pack = athernet.recv();
                 let first_data = data_pack_unwrap(&first_pack);
 
                 let mut size_buffer = [0u8; 8];
@@ -132,7 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut file = File::create(name)?;
 
                 while count < size {
-                    let pack = athernet.recv()?;
+                    let pack = athernet.recv();
                     let data = data_pack_unwrap(&pack);
 
                     // println!("receive {}", data.len());

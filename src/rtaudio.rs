@@ -39,6 +39,7 @@ extern "C" {
     fn rtaudio_destroy_stream(stream: *mut c_void);
 }
 
+#[allow(dead_code)]
 pub fn print_hosts() { unsafe { rtaudio_print_hosts() } }
 
 #[inline(always)]

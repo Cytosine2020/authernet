@@ -1,5 +1,6 @@
 use crate::athernet::Athernet;
 use crc16;
+use smoltcp::{phy::{self, DeviceCapabilities, Device, RxToken, TxToken}, time::Instant};
 
 
 pub const DATA_PACK_MAX: usize = 54;
@@ -262,38 +263,27 @@ impl MacLayer {
         })
     }
 
-    pub fn send(&mut self, data: &DataPack) -> Result<(), Box<dyn std::error::Error>> {
-        let send_tag = &mut self.send_tag[self.dest as usize];
-
-        let tag = if self.dest == MacFrame::BROADCAST_MAC {
-            0
-        } else {
-            let tag = *send_tag;
-            *send_tag = send_tag.wrapping_add(1);
-            tag
-        };
-
-        Ok(self.athernet.send(
-            MacFrame::wrap(self.mac_addr, self.dest, MacFrame::OP_DATA, tag, data)
-        )?)
+    pub fn send(&mut self, data: &DataPack) {
+        let now = smoltcp::time::Instant::now();
+        let tx = self.transmit().unwrap();
+        let len = data[0] as usize;
+        tx.consume(now, len, |buffer| {
+            Ok(buffer.copy_from_slice(&data[1..][..len]))
+        }).unwrap()
     }
 
-    pub fn recv(&mut self) -> Result<DataPack, Box<dyn std::error::Error>> {
-        loop {
-            let mac_data = self.athernet.recv()?;
-            let src = mac_data.get_src();
-            let tag = mac_data.get_tag();
-            let recv_tag = &mut self.recv_tag[src as usize];
-
-            if (src, tag) == (self.dest, *recv_tag & 0b1111) {
-                *recv_tag = recv_tag.wrapping_add(1);
-                return Ok(mac_data.unwrap());
-            }
-        }
+    pub fn recv(&mut self) -> DataPack {
+        let now = smoltcp::time::Instant::now();
+        let (rx, _) = self.receive().unwrap();
+        rx.consume(now, |data| {
+            let mut buffer = [0; DATA_PACK_MAX];
+            buffer[0] = data.len() as u8;
+            buffer[1..][..data.len()].copy_from_slice(data);
+            Ok(buffer)
+        }).unwrap()
     }
 
-    pub fn ping(&mut self)
-                -> Result<Option<std::time::Duration>, Box<dyn std::error::Error>> {
+    pub fn ping(&mut self) -> Result<Option<std::time::Duration>, Box<dyn std::error::Error>> {
         let send_tag = &mut self.send_tag[self.dest as usize];
 
         let time_out = std::time::Duration::from_secs(2);
@@ -314,5 +304,105 @@ impl MacLayer {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(),
             };
         }
+    }
+}
+
+impl<'a> Device<'a> for MacLayer {
+    type RxToken = AthernetRxToken<'a>;
+    type TxToken = AthernetTxToken<'a>;
+
+    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+        Some((
+            Self::RxToken::new(&self.athernet, &mut self.recv_tag),
+            Self::TxToken::new(&self.athernet, &mut self.send_tag),
+        ))
+    }
+
+    fn transmit(&'a mut self) -> Option<Self::TxToken> {
+        Some(Self::TxToken::new(&self.athernet, &mut self.send_tag))
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut caps = DeviceCapabilities::default();
+        caps.max_transmission_unit = DATA_PACK_MAX - 1;
+        caps.max_burst_size = Some(1);
+        caps
+    }
+}
+
+pub struct AthernetRxToken<'a> {
+    athernet: &'a Athernet,
+    recv_tag: &'a mut [u8; 255],
+}
+
+impl<'a> AthernetRxToken<'a> {
+    fn new(athernet: &'a Athernet, recv_tag: &'a mut [u8; 255]) -> Self {
+        Self { athernet, recv_tag }
+    }
+}
+
+impl<'a> phy::RxToken for AthernetRxToken<'a> {
+    fn consume<R, F>(self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
+        where F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
+    {
+        loop {
+            let mac_data = self.athernet.recv().unwrap();
+            let src = mac_data.get_src();
+            let tag = mac_data.get_tag();
+            let recv_tag = &mut self.recv_tag[src as usize];
+
+            // todo: find dest
+            let dest = 5;
+
+            if (src, tag) == (dest, *recv_tag & 0b1111) {
+                *recv_tag = recv_tag.wrapping_add(1);
+
+                let mut packet = mac_data.unwrap();
+
+                let len = packet[0] as usize;
+                return f(&mut packet[1..][..len]);
+            }
+        }
+    }
+}
+
+pub struct AthernetTxToken<'a> {
+    athernet: &'a Athernet,
+    send_tag: &'a mut [u8; 255],
+}
+
+impl<'a> AthernetTxToken<'a> {
+    fn new(athernet: &'a Athernet, send_tag: &'a mut [u8; 255]) -> Self {
+        Self { athernet, send_tag }
+    }
+}
+
+impl<'a> phy::TxToken for AthernetTxToken<'a> {
+    fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> smoltcp::Result<R>
+        where F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
+    {
+        let mut packet = [0; DATA_PACK_MAX];
+        packet[0] = len as u8;
+        let result = f(&mut packet[1..][..len]);
+
+        // todo: find dest
+        let dest = 4;
+        let mac_addr = 5;
+
+        let send_tag = &mut self.send_tag[dest as usize];
+
+        let tag = if dest == MacFrame::BROADCAST_MAC {
+            0
+        } else {
+            let tag = *send_tag;
+            *send_tag = send_tag.wrapping_add(1);
+            tag
+        };
+
+        let mac_frame = MacFrame::wrap(mac_addr, dest, MacFrame::OP_DATA, tag, &packet);
+
+        self.athernet.send(mac_frame).unwrap();
+
+        result
     }
 }
