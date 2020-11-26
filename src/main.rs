@@ -1,18 +1,14 @@
-mod rtaudio;
+mod utils;
 mod athernet;
-mod module;
-mod mac;
+pub mod wire;
 
 #[macro_use]
 extern crate lazy_static;
 
 
 use std::{env, fs::File, io::{Read, BufReader, Write}};
-use crate::mac::{DATA_PACK_MAX, DataPack, MacLayer};
+use crate::{athernet::{MacLayer, mac::{MAC_PAYLOAD_MAX, MacPayload}}, utils::slice_to_le_u64};
 
-fn data_pack_unwrap(data_pack: &DataPack) -> &[u8] {
-    &data_pack[1..][..data_pack[0] as usize]
-}
 
 pub struct FileRead<T> {
     iter: T,
@@ -25,13 +21,13 @@ impl<T> FileRead<T> {
 }
 
 impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
-    type Item = DataPack;
+    type Item = MacPayload;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut ret = [0; DATA_PACK_MAX];
-        let mut size = DATA_PACK_MAX - 1;
+        let mut ret = [0; MAC_PAYLOAD_MAX];
+        let mut size = MAC_PAYLOAD_MAX - 1;
 
-        for i in 0..DATA_PACK_MAX - 1 {
+        for i in 0..MAC_PAYLOAD_MAX - 1 {
             if let Some(byte) = self.iter.next() {
                 ret[i + 1] = byte;
             } else {
@@ -48,18 +44,19 @@ impl<T: Iterator<Item=u8>> Iterator for FileRead<T> {
 }
 
 enum Command {
-    Send(String),
-    Recv(String),
-    Ping,
+    Send(u8, String),
+    Recv(u8, String),
+    Ping(u8),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // let _ = IPV4Layer::new([192, 168, 0, 1], 4);
+
     let mut args = env::args();
 
     args.next();
 
     let src = args.next().unwrap().parse::<u8>()? & 0b1111;
-    let dest = args.next().unwrap().parse::<u8>()? & 0b1111;
     let mut commands = Vec::new();
     let mut perf = false;
     let mut wait = 0;
@@ -74,57 +71,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         match command[1] as char {
-            'p' => commands.push(Command::Ping),
             'e' => perf = true,
+            's' => {
+                commands.push(Command::Send(
+                    args.next().unwrap().parse::<u8>()?, args.next().unwrap(),
+                ))
+            }
+            'r' => {
+                commands.push(Command::Recv(
+                    args.next().unwrap().parse::<u8>()?, args.next().unwrap(),
+                ))
+            }
+            'p' => commands.push(Command::Ping(args.next().unwrap().parse::<u8>()?)),
+            'w' => wait = args.next().unwrap().parse::<u64>()?,
             _ => {
-                if let Some(arg) = args.next() {
-                    match command[1] as char {
-                        's' => commands.push(Command::Send(arg)),
-                        'r' => commands.push(Command::Recv(arg)),
-                        'w' => wait = arg.parse::<u64>()?,
-                        _ => return Err(String::from(
-                            format!("unknown command: {:?}", command_).to_owned()
-                        ).into()),
-                    }
-                } else {
-                    Err(format!("command {:?} need parameter!", command))?;
-                }
+                Err(format!("command {:?} need parameter!", command))?;
             }
         }
     }
 
-    let mut athernet = MacLayer::new(src, dest, perf)?;
+    let mut athernet = MacLayer::new(src, perf)?;
 
     for command in commands {
         match command {
-            Command::Send(name) => {
+            Command::Send(dest, name) => {
                 let file = File::open(name.clone())?;
 
                 let size = file.metadata()?.len();
 
                 println!("sending {:?}, size {}", name, size);
 
-                let mut buffer = [0; DATA_PACK_MAX];
+                let mut buffer = [0; MAC_PAYLOAD_MAX];
                 buffer[0] = 8;
                 buffer[1..9].copy_from_slice(&size.to_le_bytes());
 
-                athernet.send(&buffer);
+                athernet.send(&buffer, dest)?;
 
                 let iter = BufReader::new(file)
                     .bytes().filter_map(|item| item.ok());
 
                 for data_pack in FileRead::new(iter) {
-                    athernet.send(&data_pack);
+                    athernet.send(&data_pack, dest)?;
                 }
             }
-            Command::Recv(name) => {
-                let first_pack = athernet.recv();
-                let first_data = data_pack_unwrap(&first_pack);
+            Command::Recv(dest, name) => {
+                let first_pack = athernet.recv(dest)?;
 
-                let mut size_buffer = [0u8; 8];
-                size_buffer.copy_from_slice(first_data);
-
-                let size = u64::from_le_bytes(size_buffer);
+                let size = slice_to_le_u64(&*first_pack);
                 let mut count = 0;
 
                 println!("receiving {:?}, size {}", name, size);
@@ -132,12 +125,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut file = File::create(name)?;
 
                 while count < size {
-                    let pack = athernet.recv();
-                    let data = data_pack_unwrap(&pack);
+                    let data = athernet.recv(dest)?;
 
-                    // println!("receive {}", data.len());
-
-                    file.write_all(data)?;
+                    file.write_all(&*data)?;
                     count += data.len() as u64;
                 }
 
@@ -145,9 +135,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("receive {}", count);
             }
-            Command::Ping => {
+            Command::Ping(dest) => {
                 for tag in 0..=255u8 {
-                    println!("ping {}: {:?}", tag, athernet.ping()?);
+                    println!("ping {}: {:?}", tag, athernet.ping(dest)?);
                 }
             }
         }

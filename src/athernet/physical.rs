@@ -1,10 +1,13 @@
 use std::collections::VecDeque;
-use crate::mac::{MAC_FRAME_MAX, MacFrame, MacFrameRaw};
+use crate::athernet::mac::MacFrame;
 
 
 const SYMBOL_LEN: usize = 5;
 const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
+pub const PHY_PAYLOAD_MAX: usize = 256;
+
+pub type PhyPayload = [u8; PHY_PAYLOAD_MAX];
 
 lazy_static!(
     static ref CARRIER: [i16; SYMBOL_LEN] = {
@@ -83,14 +86,14 @@ pub fn modulate(buffer: MacFrame) -> impl Iterator<Item=i16> {
 
 #[derive(Copy, Clone)]
 struct BitReceive {
-    inner: MacFrameRaw,
+    inner: PhyPayload,
     count: usize,
     mac_addr: u8,
 }
 
 impl BitReceive {
     #[inline]
-    pub fn new(mac_addr: u8) -> Self { Self { inner: [0; MAC_FRAME_MAX], count: 0, mac_addr } }
+    pub fn new(mac_addr: u8) -> Self { Self { inner: [0; PHY_PAYLOAD_MAX], count: 0, mac_addr } }
 
     #[inline]
     pub fn push(&mut self, bit: bool) -> Option<Option<MacFrame>> {
@@ -106,7 +109,7 @@ impl BitReceive {
                 1
             } + MacFrame::MAC_DATA_SIZE;
 
-            if size > MAC_FRAME_MAX { return Some(None); }
+            if size > PHY_PAYLOAD_MAX { return Some(None); }
 
             if self.count < size * 8 {
                 None

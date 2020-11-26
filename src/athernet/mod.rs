@@ -1,12 +1,16 @@
+mod physical;
+mod rtaudio;
+pub mod mac;
+
+
 use std::sync::{
     Arc, atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver, RecvError, Sender, SendError, RecvTimeoutError},
+    mpsc::{self, Receiver, RecvError, Sender, SyncSender, SendError, RecvTimeoutError},
 };
 use rand::{Rng, thread_rng};
-use crate::{
-    mac::MacFrame, module::{Demodulator, modulate},
-    rtaudio::{Stream, create_input_stream, create_output_stream},
-};
+use mac::{MacFrame, MacAddress, MAC_PAYLOAD_MAX};
+use rtaudio::{Stream, create_input_stream, create_output_stream};
+use physical::{modulate, Demodulator};
 
 
 const ACK_TIMEOUT: usize = 1100;
@@ -21,7 +25,7 @@ enum SendState<I> {
 }
 
 pub struct Athernet {
-    sender: Sender<MacFrame>,
+    sender: SyncSender<MacFrame>,
     receiver: Receiver<MacFrame>,
     ping_receiver: Receiver<(u8, u8)>,
     _input_stream: Stream,
@@ -36,8 +40,8 @@ impl Athernet {
         ack_recv_receiver: Receiver<(u8, u8)>,
         ping_receiver: Receiver<(u8, u8)>,
         perf: bool,
-    ) -> Result<(Sender<MacFrame>, Stream), Box<dyn std::error::Error>> {
-        let (sender, receiver) = mpsc::channel();
+    ) -> Result<(SyncSender<MacFrame>, Stream), Box<dyn std::error::Error>> {
+        let (sender, receiver) = mpsc::sync_channel(0);
 
         let mut send_state = SendState::Idle(0);
         let mut buffer: Option<(MacFrame, usize, usize)> = None;
@@ -46,7 +50,7 @@ impl Athernet {
             SendState::Sending(frame, modulate(frame), count)
         };
 
-        let back_off = move |frame: MacFrame, count: usize| {
+        let backoff = move |frame: MacFrame, count: usize| {
             let maximum = 1 << std::cmp::min(4, count);
             let back_off = if frame.is_data() {
                 thread_rng().gen_range::<usize, usize, usize>(0, maximum)
@@ -105,7 +109,7 @@ impl Athernet {
                         };
                     } else {
                         if frame.is_data() || frame.is_ping_request() {
-                            buffer = back_off(frame, count);
+                            buffer = backoff(frame, count);
                         } else if !frame.is_ack() {
                             buffer = Some((frame, 0, count));
                         }
@@ -124,7 +128,7 @@ impl Athernet {
                             send_state = SendState::Idle(FRAME_INTERVAL);
                         };
                     } else {
-                        buffer = back_off(frame, count);
+                        buffer = backoff(frame, count);
                         send_state = SendState::Idle(0);
                     };
                 }
@@ -218,5 +222,78 @@ impl Athernet {
                              -> Result<(u8, u8), RecvTimeoutError>
     {
         self.ping_receiver.recv_timeout(timeout)
+    }
+}
+
+pub struct MacLayer {
+    athernet: Athernet,
+    send_tag: [u8; 255],
+    recv_tag: [u8; 255],
+    mac_addr: u8,
+}
+
+impl MacLayer {
+    pub fn get_mtu(&self) -> usize { MAC_PAYLOAD_MAX - 1 }
+
+    pub fn new(mac_addr: MacAddress, perf: bool) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            athernet: Athernet::new(mac_addr, perf)?,
+            send_tag: [0; 255],
+            recv_tag: [0; 255],
+            mac_addr,
+        })
+    }
+
+    pub fn send(&mut self, data: &[u8], dest: MacAddress) -> Result<(), Box<dyn std::error::Error>> {
+        let send_tag = &mut self.send_tag[dest as usize];
+
+        let tag = if dest == MacFrame::BROADCAST_MAC {
+            0
+        } else {
+            let tag = *send_tag;
+            *send_tag = send_tag.wrapping_add(1);
+            tag
+        };
+
+        Ok(self.athernet.send(MacFrame::new_data(self.mac_addr, dest, tag, data))?)
+    }
+
+    pub fn recv(&mut self, dest: MacAddress) -> Result<Box<[u8]>, Box<dyn std::error::Error>> {
+        loop {
+            let mac_data = self.athernet.recv()?;
+            let src = mac_data.get_src();
+            let tag = mac_data.get_tag();
+            let recv_tag = &mut self.recv_tag[src as usize];
+
+            if (src, tag) == (dest, *recv_tag & 0b1111) {
+                *recv_tag = recv_tag.wrapping_add(1);
+                return Ok(mac_data.unwrap());
+            }
+        }
+    }
+
+    pub fn ping(&mut self, dest: MacAddress)
+                -> Result<Option<std::time::Duration>, Box<dyn std::error::Error>>
+    {
+        let send_tag = &mut self.send_tag[dest as usize];
+
+        let time_out = std::time::Duration::from_secs(2);
+
+        let start = std::time::SystemTime::now();
+
+        self.athernet.send(MacFrame::new_ping_request(self.mac_addr, dest, *send_tag))?;
+
+        loop {
+            match self.athernet.ping_recv_timeout(time_out - start.elapsed()?) {
+                Ok(pair) => {
+                    if pair == (dest, *send_tag & 0b1111) {
+                        *send_tag = send_tag.wrapping_add(1);
+                        return Ok(Some(start.elapsed()?));
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(),
+            };
+        }
     }
 }
