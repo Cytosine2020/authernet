@@ -1,15 +1,38 @@
-use crate::{
-    athernet::physical::{PHY_PAYLOAD_MAX, PhyPayload},
-    utils::{crc16_checksum, crc8_checksum}
-};
+use crate::physical::{PHY_PAYLOAD_MAX, PhyPayload};
 
 
-pub const CRC_SIZE: usize = 2;
-pub const MAC_PAYLOAD_MAX: usize = PHY_PAYLOAD_MAX - MacFrame::MAC_DATA_SIZE - CRC_SIZE;
-
-pub type MacPayload = [u8; MAC_PAYLOAD_MAX];
+// pub const CRC_SIZE: usize = 2;
+// pub const MAC_PAYLOAD_MAX: usize = PHY_PAYLOAD_MAX - MacFrame::MAC_DATA_SIZE - CRC_SIZE;
+//
+// pub type MacPayload = [u8; MAC_PAYLOAD_MAX];
 
 pub type MacAddress = u8;
+
+
+lazy_static!(
+    static ref CRC_TABLE: [u8; 256] = {
+        let mut table = [0; 256];
+
+        for i in 0..256 {
+            table[i] = (0..=8).fold(i as u8, |crc, _| {
+                (crc << 1) ^ if (crc & 0x80) > 0 { 0x31 } else { 0 }
+            });
+        }
+
+        table
+    };
+);
+
+pub fn crc8_checksum<I: Iterator<Item=u8>>(iter: I) -> u8 {
+    iter.fold(0, |crc, byte| CRC_TABLE[(crc ^ byte) as usize])
+}
+
+pub fn crc16_checksum<I: Iterator<Item=u8>>(iter: I) -> u16 {
+    let buffer = iter.collect::<Vec<_>>();
+
+    crc16::State::<crc16::ARC>::calculate(buffer.as_slice())
+}
+
 
 #[derive(Copy, Clone)]
 pub struct MacFrame {
@@ -24,8 +47,6 @@ impl MacFrame {
     pub const BROADCAST_MAC: u8 = 0b1111;
 
     pub const OP_DATA: u8 = 0b0000;
-    pub const OP_PING_REQ: u8 = 0b0001;
-    pub const OP_PING_REPLY: u8 = 0b0010;
     pub const OP_ACK: u8 = 0b1111;
 
     #[inline]
@@ -113,34 +134,6 @@ impl MacFrame {
     }
 
     #[inline]
-    pub fn new_ping_request(src: u8, dest: u8, tag: u8) -> Self {
-        let mut result = Self::new();
-
-        result
-            .set_src(src)
-            .set_dest(dest)
-            .set_op(Self::OP_PING_REQ)
-            .set_tag(tag)
-            .generate_crc();
-
-        result
-    }
-
-    #[inline]
-    pub fn new_ping_reply(src: u8, dest: u8, tag: u8) -> Self {
-        let mut result = Self::new();
-
-        result
-            .set_src(src)
-            .set_dest(dest)
-            .set_op(Self::OP_PING_REPLY)
-            .set_tag(tag)
-            .generate_crc();
-
-        result
-    }
-
-    #[inline]
     pub fn from_raw(inner: PhyPayload) -> Self { Self { inner } }
 
     #[inline]
@@ -198,9 +191,6 @@ impl MacFrame {
 
     #[inline]
     pub fn is_data(&self) -> bool { self.get_op() == MacFrame::OP_DATA }
-
-    #[inline]
-    pub fn is_ping_request(&self) -> bool { self.get_op() == MacFrame::OP_PING_REQ }
 
     #[inline]
     pub fn check(&self, mac_addr: u8) -> bool {

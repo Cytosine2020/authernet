@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use crate::athernet::mac::MacFrame;
+use crate::mac::MacFrame;
 
 
 const SYMBOL_LEN: usize = 5;

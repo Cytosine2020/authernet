@@ -57,6 +57,7 @@ dependencies = [
  "cmake",
  "crc16",
  "lazy_static",
+ "libc",
  "rand",
 ]
 

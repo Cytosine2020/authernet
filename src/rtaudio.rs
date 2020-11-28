@@ -19,6 +19,8 @@ pub struct Stream {
     _closure: Box<dyn FnMut(&mut [i16])>,
 }
 
+unsafe impl Send for Stream {}
+
 impl Stream {
     pub unsafe fn new(inner: *mut c_void, _closure: Box<dyn FnMut(&mut [i16])>) -> Self {
         Self { inner, _closure }
