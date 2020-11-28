@@ -1,10 +1,10 @@
 use crate::physical::{PHY_PAYLOAD_MAX, PhyPayload};
 
 
-// pub const CRC_SIZE: usize = 2;
-// pub const MAC_PAYLOAD_MAX: usize = PHY_PAYLOAD_MAX - MacFrame::MAC_DATA_SIZE - CRC_SIZE;
-//
-// pub type MacPayload = [u8; MAC_PAYLOAD_MAX];
+pub const CRC_SIZE: usize = 2;
+pub const MAC_PAYLOAD_MAX: usize = PHY_PAYLOAD_MAX - MacFrame::MAC_DATA_SIZE - CRC_SIZE;
+
+pub type MacPayload = [u8; MAC_PAYLOAD_MAX];
 
 pub type MacAddress = u8;
 
@@ -81,10 +81,9 @@ impl MacFrame {
     }
 
     #[inline]
-    fn set_pay_load(&mut self, data: &[u8]) -> &mut Self {
-        let size = data.len();
-        self.inner[Self::MAC_DATA_SIZE] = size as u8;
-        self.inner[Self::MAC_DATA_SIZE + 1..][..size].copy_from_slice(&data[..size]);
+    fn set_pay_load(&mut self, data: &MacPayload) -> &mut Self {
+        let size = data[0] as usize + 1;
+        self.inner[Self::MAC_DATA_SIZE..][..size].copy_from_slice(&data[..size]);
         self
     }
 
@@ -105,7 +104,7 @@ impl MacFrame {
     }
 
     #[inline]
-    pub fn new_data(src: u8, dest: u8, tag: u8, data: &[u8]) -> Self {
+    pub fn new_data(src: u8, dest: u8, tag: u8, data: &MacPayload) -> Self {
         let mut result = Self::new();
 
         result
@@ -204,8 +203,10 @@ impl MacFrame {
     }
 
     #[inline]
-    pub fn unwrap(&self) -> Box<[u8]> {
-        let size = self.get_payload_size();
-        self.inner[Self::MAC_DATA_SIZE + 1..][..size].iter().cloned().collect()
+    pub fn unwrap(&self) -> MacPayload {
+        let mut data_pack = [0u8; MAC_PAYLOAD_MAX];
+        let size = self.get_size() - Self::MAC_DATA_SIZE;
+        data_pack[..size].copy_from_slice(&self.inner[Self::MAC_DATA_SIZE..][..size]);
+        data_pack
     }
 }

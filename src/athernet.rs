@@ -4,7 +4,7 @@ use std::sync::{
 };
 use rand::{Rng, thread_rng};
 use crate::{
-    mac::{MacFrame, MacAddress},
+    mac::{MacFrame, MacAddress, MacPayload},
     rtaudio::{Stream, create_input_stream, create_output_stream},
     physical::{modulate, Demodulator},
 };
@@ -226,7 +226,7 @@ impl MacLayerSender {
         Self { athernet_sender: athernet_send, send_tag: [0u8; 255], mac_addr }
     }
 
-    pub fn send(&mut self, data: &[u8], dest: MacAddress) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn send(&mut self, data: &MacPayload, dest: MacAddress) -> Result<(), Box<dyn std::error::Error>> {
         let send_tag = &mut self.send_tag[dest as usize];
 
         let tag = if dest == MacFrame::BROADCAST_MAC {
@@ -251,7 +251,7 @@ impl MacLayerReceiver {
         Self { athernet_receiver, recv_tag: [0u8; 255] }
     }
 
-    pub fn recv(&mut self, dest: MacAddress) -> Result<Box<[u8]>, Box<dyn std::error::Error>> {
+    pub fn recv(&mut self, dest: MacAddress) -> Result<MacPayload, Box<dyn std::error::Error>> {
         loop {
             let mac_data = self.athernet_receiver.recv()?;
             let src = mac_data.get_src();

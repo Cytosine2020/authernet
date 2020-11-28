@@ -5,7 +5,7 @@ use crate::mac::MacFrame;
 const SYMBOL_LEN: usize = 5;
 const BARKER: [bool; 7] = [true, true, true, false, false, true, false];
 
-pub const PHY_PAYLOAD_MAX: usize = 256;
+pub const PHY_PAYLOAD_MAX: usize = 260;
 
 pub type PhyPayload = [u8; PHY_PAYLOAD_MAX];
 
