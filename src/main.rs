@@ -14,11 +14,27 @@ extern crate lazy_static;
 const ATHERNET_SOCKET: &str = "/tmp/athernet.socket\0";
 
 
-fn open_socket() -> i32 {
-    let mut addr = libc::sockaddr_un {
+#[cfg(target_os = "macos")]
+fn socket_default() -> libc::sockaddr_un {
+    libc::sockaddr_un {
+        sun_len: 0,
+        sun_family: libc::AF_UNIX as u8,
+        sun_path: [0; 104],
+    }
+}
+
+
+#[cfg(target_os = "linux")]
+fn socket_default() -> libc::sockaddr_un {
+    libc::sockaddr_un {
         sun_family: libc::AF_UNIX as u16,
         sun_path: [0; 108],
-    };
+    }
+}
+
+
+fn open_socket() -> i32 {
+    let mut addr = socket_default();
 
     let str_size = std::cmp::min(ATHERNET_SOCKET.len(), addr.sun_path.len());
     let size = std::mem::size_of::<libc::sockaddr_un>();

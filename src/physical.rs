@@ -143,7 +143,6 @@ impl Demodulator {
     const HEADER_THRESHOLD_SCALE: i64 = 1 << 19;
     const MOVING_AVERAGE: i64 = 16;
     const ACTIVE_THRESHOLD: i64 = 512;
-    const JAMMING_THRESHOLD: i64 = 4096;
 
     fn dot_product<I: Iterator<Item=i16>, U: Iterator<Item=i16>>(iter_a: I, iter_b: U) -> i64 {
         iter_a.zip(iter_b).map(|(a, b)| a as i64 * b as i64).sum::<i64>()
@@ -172,8 +171,6 @@ impl Demodulator {
     }
 
     pub fn is_active(&self) -> bool {
-        if self.moving_average > Self::JAMMING_THRESHOLD { return true; }
-
         if let DemodulateState::RECEIVE(_, receiver) = self.state {
             !receiver.is_self()
         } else {
@@ -205,12 +202,6 @@ impl Demodulator {
                 }
             }
             DemodulateState::RECEIVE(mut count, mut buffer) => {
-                if self.moving_average > Self::JAMMING_THRESHOLD {
-                    self.state = DemodulateState::WAITE;
-                    self.window.clear();
-                    return None;
-                }
-
                 count += 1;
 
                 self.state = if count == SYMBOL_LEN {
