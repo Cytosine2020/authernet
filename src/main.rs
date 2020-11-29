@@ -16,9 +16,8 @@ const ATHERNET_SOCKET: &str = "/tmp/athernet.socket\0";
 
 fn open_socket() -> i32 {
     let mut addr = libc::sockaddr_un {
-        sun_len: 0,
-        sun_family: libc::AF_UNIX as u8,
-        sun_path: [0; 104],
+        sun_family: libc::AF_UNIX as u16,
+        sun_path: [0; 108],
     };
 
     let str_size = std::cmp::min(ATHERNET_SOCKET.len(), addr.sun_path.len());
@@ -38,7 +37,7 @@ fn open_socket() -> i32 {
     }
 
     if unsafe { libc::listen(socket, 0) } != 0 {
-        panic!("listen error {}, std::io::Error::last_os_error()");
+        panic!("listen error {}", std::io::Error::last_os_error());
     }
 
     let client = unsafe {
