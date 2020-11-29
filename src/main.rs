@@ -79,13 +79,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = open_socket();
 
-    std::thread::spawn(move || {
+    let receiver = std::thread::spawn(move || {
         let mut buffer = [0u8; MAC_PAYLOAD_MAX];
 
         loop {
             let size = unsafe {
                 libc::recv(client, buffer.as_mut_ptr() as *mut _, buffer.len(), 0)
             };
+
+            if size == 0 { return; }
 
             if size as usize != MAC_PAYLOAD_MAX {
                 eprintln!("recv error");
@@ -96,16 +98,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    loop {
-        let buffer = receiver.recv(dest).unwrap();
+    let sender = std::thread::spawn(move || {
+        loop {
+            let buffer = receiver.recv(dest).unwrap();
 
-        let size = unsafe {
-            libc::send(client, buffer.as_ptr() as *const _, buffer.len(), 0)
-        };
+            let size = unsafe {
+                libc::send(client, buffer.as_ptr() as *const _, buffer.len(), 0)
+            };
 
-        if size as usize != buffer.len() {
-            eprintln!("send error");
-            std::process::exit(-1);
+            if size == 0 { return; }
+
+            if size as usize != buffer.len() {
+                eprintln!("send error");
+                std::process::exit(-1);
+            }
         }
-    }
+    });
+
+    receiver.join();
+    sender.join();
 }
