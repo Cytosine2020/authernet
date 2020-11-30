@@ -10,7 +10,7 @@ use crate::{
 };
 
 
-const ACK_TIMEOUT: usize = 5000;
+const ACK_TIMEOUT: usize = 1100;
 const BACK_OFF_WINDOW: usize = 500;
 const FRAME_INTERVAL: usize = 50;
 
