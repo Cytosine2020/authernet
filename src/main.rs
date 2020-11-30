@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = open_socket();
 
-    let receiver = std::thread::spawn(move || {
+    let recv = std::thread::spawn(move || {
         let mut buffer = [0u8; MAC_PAYLOAD_MAX];
 
         loop {
@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let sender = std::thread::spawn(move || {
+    let send = std::thread::spawn(move || {
         loop {
             let buffer = receiver.recv(dest).unwrap();
 
@@ -115,6 +115,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    receiver.join();
-    sender.join();
+    recv.join().unwrap();
+    send.join().unwrap();
+
+    Ok(())
 }
