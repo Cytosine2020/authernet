@@ -7,7 +7,7 @@
 #elif defined(__linux__)
 #define __UNIX_JACK__
 #else
-#error "paltform not supported!"
+#error "platform not supported!"
 #endif
 
 
